@@ -140,9 +140,14 @@ def main() -> None:
     render_page_header(HOME_TITLE, caption=HOME_CAPTION)
 
     if not db_ready:
-        st.error("DB가 아직 초기화되지 않았습니다.")
+        st.error(
+            "DB 초기화가 완료되지 않았습니다. (테이블 누락 또는 system user 시드 누락)"
+        )
         st.code("python scripts/init_db.py --seed", language="bash")
-        st.caption("초기화 후 페이지를 새로고침하세요.")
+        st.caption(
+            "스키마가 이미 있더라도 `--seed` 로 시스템 사용자 행을 심어야 "
+            "감사 로그 FK 가 만족됩니다. 초기화 후 페이지를 새로고침하세요."
+        )
         return
 
     _render_intro()

@@ -4,9 +4,12 @@ import pytest
 
 from ml.registry import (
     AlgoSpec,
+    OptionalBackendStatus,
+    _summarize_reason,
     available_algorithms,
     get_spec,
     get_specs,
+    optional_backends_status,
 )
 
 CLASSIFICATION_CORE = {"logistic_regression", "decision_tree", "random_forest"}
@@ -71,3 +74,48 @@ def test_registry_does_not_import_streamlit_or_sqlalchemy() -> None:
         text = f.read()
     assert "streamlit" not in text
     assert "sqlalchemy" not in text
+
+
+# ---------------------------------------------- Optional backend visibility
+
+
+def test_optional_backends_status_covers_both_backends() -> None:
+    """xgboost / lightgbm 는 설치 여부와 무관하게 status 리스트에 2건 등장해야 한다."""
+    names = [s.name for s in optional_backends_status()]
+    assert names == ["xgboost", "lightgbm"], names
+
+
+def test_optional_backend_status_structure() -> None:
+    for s in optional_backends_status():
+        assert isinstance(s, OptionalBackendStatus)
+        if s.available:
+            assert s.reason == ""
+        else:
+            # skip 사유는 반드시 비어있지 않아 사용자가 읽고 복구할 수 있어야 한다.
+            assert s.reason
+            # libomp 누락 같은 흔한 케이스는 reason 안에 복구 힌트가 들어간다.
+            assert len(s.reason) < 200
+
+
+def test_summarize_reason_detects_libomp() -> None:
+    """macOS 의 libomp 누락 메시지가 포함되면 사용자 친화적 사유로 축약한다."""
+    err = OSError(
+        "dlopen(libxgboost.dylib): Library not loaded: @rpath/libomp.dylib"
+    )
+    reason = _summarize_reason(err)
+    assert "libomp" in reason
+    assert "brew install libomp" in reason
+
+
+def test_summarize_reason_detects_missing_module() -> None:
+    reason = _summarize_reason(ModuleNotFoundError("No module named 'xgboost'"))
+    assert "pip install" in reason
+
+
+def test_skipped_backend_is_absent_from_specs() -> None:
+    """status 가 skip 된 백엔드는 get_specs 결과에도 나타나지 않아야 한다."""
+    skipped = {s.name for s in optional_backends_status() if not s.available}
+    clf_names = set(available_algorithms("classification"))
+    reg_names = set(available_algorithms("regression"))
+    assert not (skipped & clf_names), f"skip 되었는데 분류에 등록됨: {skipped & clf_names}"
+    assert not (skipped & reg_names), f"skip 되었는데 회귀에 등록됨: {skipped & reg_names}"

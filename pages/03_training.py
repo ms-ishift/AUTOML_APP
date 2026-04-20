@@ -31,6 +31,7 @@ from ml.evaluators import (
     METRIC_DIRECTIONS,
     REGRESSION_METRICS,
 )
+from ml.registry import optional_backends_status
 from ml.schemas import TrainingConfig
 from pages.components.data_preview import render_profile
 from pages.components.layout import (
@@ -116,6 +117,22 @@ def _metric_options(task_type: str) -> tuple[str, ...]:
 def _describe_metric(metric_key: str) -> str:
     direction = METRIC_DIRECTIONS.get(metric_key, "max")
     return "↑ 클수록 좋음" if direction == "max" else "↓ 작을수록 좋음"
+
+
+def _render_optional_backend_notice() -> None:
+    """xgboost / lightgbm 이 런타임 누락으로 스킵됐다면 사용자에게 사유를 한번 고지한다.
+
+    조용히 후보에서 빠지면 "왜 성능 좋은 모델이 후보에 없지?" 혼란이 생기므로,
+    `ml.registry.optional_backends_status()` 결과를 읽어 `st.info` 로 노출한다.
+    """
+    skipped = [s for s in optional_backends_status() if not s.available]
+    if not skipped:
+        return
+    lines = [f"- **{s.name}** — {s.reason}" for s in skipped]
+    st.info(
+        "일부 부스팅 백엔드가 현재 환경에서 비활성화돼 학습 후보에서 제외됩니다. "
+        "필요하면 아래 원인을 해결 후 앱을 재시작하세요.\n\n" + "\n".join(lines)
+    )
 
 
 def _render_dataset_picker(datasets: list[DatasetDTO], *, current_id: int | None) -> int | None:
@@ -302,6 +319,7 @@ def _render_training_flow(
         render_profile(profile)
 
     st.subheader("학습 설정")
+    _render_optional_backend_notice()
     suggested = _load_suggested_excluded(current_dataset_id)
     config = _render_config_form(profile, suggested)
 

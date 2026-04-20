@@ -791,16 +791,16 @@ with session_scope() as session:
 
 | ID | 날짜 | 단계 | 요약 | 영향 | 대응 | 상태 |
 |----|------|------|------|------|------|------|
-| _(없음)_ | | | | | | |
+| R-001 | 2026-04-20 | 3.2 | macOS 에서 `libomp` 누락 시 xgboost/lightgbm import 실패 → 조용히 후보 제외 | 학습 페이지에서 부스팅 모델이 선택지에 안 보이는데 원인이 불투명 | ① `ml/registry.py` 에 `optional_backends_status()` + 구조화 로그 추가 ② `make doctor` 에 상태 노출 ③ 학습 페이지 상단 `st.info` 로 사유 안내 ④ README 트러블슈팅 / 스택 표 갱신 ⑤ `brew install libomp` 실행은 환경별 수동 (README 기재) | **mitigated** |
 
 **템플릿**
 ```
-| R-001 | 2026-04-18 | 3.5 | xgboost import 실패 (M1) | trainers 테스트 실패 | extras로 격리 + 조건부 스킵 | open |
+| R-XXX | 2026-04-18 | 3.5 | 짧은 요약 | 영향 | 대응 | open / mitigated / closed |
 ```
 
 ### 알려진 리스크 (사전 식별)
 
-- **XGBoost/LightGBM macOS 설치**: `brew install libomp` 필요할 수 있음. 실패 시 `registry.py`에서 import 가드로 skip.
+- **XGBoost/LightGBM macOS 설치** _(R-001, mitigated)_: macOS 에서 `libomp` 누락 시 import 가 실패해 `registry.py` 에서 자동 skip. 스킵된 사유는 `make doctor` / 학습 페이지 상단 `st.info` / 구조화 로그(`registry.optional_backend_skipped`) 세 경로로 가시화된다. 복구: `brew install libomp` 후 앱 재시작.
 - **대용량 CSV 성능**: NFR-003 10초 목표. 초과 시 `@st.cache_data` 및 `pd.read_csv(..., usecols=...)` 범위를 조정.
 - **Streamlit 재실행 모델**: 세션 상태 의존이 과해지면 디버깅이 어려워진다. 단계 5에서 세션 키 총량을 4개(`SessionKey`)로 고정.
 - **SQLite 동시성**: MVP는 단일 사용자. 향후 Postgres 전환 시 트랜잭션 경계 재검토.

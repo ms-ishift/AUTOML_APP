@@ -8,7 +8,14 @@ import pytest
 from sqlalchemy import create_engine
 
 from repositories import base as repo_base
-from repositories.models import Base
+from repositories.models import (
+    SYSTEM_USER_ID,
+    SYSTEM_USER_LOGIN_ID,
+    SYSTEM_USER_NAME,
+    SYSTEM_USER_ROLE,
+    Base,
+    User,
+)
 from utils.db_utils import REQUIRED_TABLES, is_db_initialized
 
 if TYPE_CHECKING:
@@ -21,12 +28,38 @@ def _install_engine(monkeypatch: pytest.MonkeyPatch, engine: Engine) -> None:
     monkeypatch.setattr(repo_base, "engine", engine)
 
 
+def _seed_system_user(engine: Engine) -> None:
+    """`is_db_initialized` 가 system user 존재까지 확인하므로 시드를 심어준다."""
+    from sqlalchemy.orm import Session
+
+    with Session(engine) as session:
+        session.add(
+            User(
+                user_id=SYSTEM_USER_ID,
+                login_id=SYSTEM_USER_LOGIN_ID,
+                user_name=SYSTEM_USER_NAME,
+                role=SYSTEM_USER_ROLE,
+            )
+        )
+        session.commit()
+
+
 def test_is_db_initialized_true_when_all_tables_present(
     sqlite_engine: Engine,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _install_engine(monkeypatch, sqlite_engine)
+    _seed_system_user(sqlite_engine)
     assert is_db_initialized() is True
+
+
+def test_is_db_initialized_false_when_system_user_missing(
+    sqlite_engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """스키마는 다 있지만 `--seed` 누락으로 system user 가 없으면 False."""
+    _install_engine(monkeypatch, sqlite_engine)
+    assert is_db_initialized() is False
 
 
 def test_is_db_initialized_false_on_empty_db(

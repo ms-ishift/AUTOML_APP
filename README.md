@@ -22,34 +22,34 @@
 > **전제**: Python 3.11+ · macOS / Linux / WSL2. 아래 명령은 **새 클론에서 그대로 재현**되도록 검증되어 있다.
 
 ```bash
-# 1) 가상환경
-python3.11 -m venv .venv && source .venv/bin/activate
+# 1) 가상환경 + 의존성 (Makefile 이 .venv 를 자동 생성·사용)
+make install
+#   내부: python3.11 -m venv .venv → .venv/bin/pip install -r requirements.txt
+#   활성화(source) 없이도 이후 모든 make 타깃이 .venv 바이너리로 실행된다.
 
-# 2) 의존성
-pip install -r requirements.txt
-
-# 3) 환경 변수
+# 2) 환경 변수
 cp .env.example .env        # 필요 시 값 수정 (MAX_UPLOAD_MB 등)
 
-# 4) DB 초기화
-python scripts/init_db.py --drop --seed
+# 3) DB 초기화
+make samples                # 선택: sklearn 기반 샘플 CSV 2개 생성
+./.venv/bin/python scripts/init_db.py --drop --seed
 #  --drop : 기존 스키마 제거 후 재생성 (개발용)
 #  --seed : 시스템 사용자 + 샘플 프로젝트 upsert
 
-# 5) 샘플 데이터셋 생성 (선택, sklearn iris / diabetes)
-python scripts/generate_samples.py
-#   → samples/classification.csv, samples/regression.csv
-
-# 6) 앱 실행 (내부에서 .env 의 MAX_UPLOAD_MB 를 .streamlit/config.toml 에 동기화)
+# 4) 앱 실행 (내부에서 .env 의 MAX_UPLOAD_MB 를 .streamlit/config.toml 에 동기화)
 make run
-#   또는 python scripts/sync_streamlit_config.py && streamlit run app.py
 ```
 
 기본 주소: <http://localhost:8501>
 
-`make` 가 없는 환경이라면 아래 명령으로 대체 가능:
+> **Tip** `make run` 이 실패하면 `make doctor` 로 어느 python/streamlit 이 잡혔는지 확인한다.
+> 대부분 "`.venv` 미생성" 또는 "requirements 미설치" 가 원인이며 `make install` 로 해결된다.
+
+`make` 가 없는 환경이라면 venv 를 수동 활성화한 뒤 아래로 대체 가능:
 
 ```bash
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
 python scripts/sync_streamlit_config.py
 streamlit run app.py
 ```
@@ -70,13 +70,15 @@ streamlit run app.py
 |------|------|
 | UI | Streamlit (멀티페이지) |
 | Data | pandas, openpyxl |
-| ML | scikit-learn (LogReg/Tree/RF, Ridge/Lasso/RF) |
+| ML | scikit-learn (LogReg/Tree/RF, Ridge/Lasso/RF) + (선택) XGBoost / LightGBM |
 | 저장 | joblib, SQLAlchemy 2.x (SQLite → Postgres) |
 | 시각화 | plotly (혼동행렬·회귀 산점도) |
 | 설정 | pydantic-settings, python-dotenv |
 | 품질 | ruff, black, mypy, pytest |
 
-> XGBoost / LightGBM 은 `ml/registry.py` 에 Spec 추가만으로 확장 가능하지만, MVP 기본 의존성에는 포함되지 않는다.
+> XGBoost / LightGBM 은 `requirements.txt` 에 포함돼 있으나 **네이티브 런타임 의존**
+> (macOS 는 `libomp`) 이 없으면 import 가 실패해 학습 후보에서 자동 제외된다. 현재 상태는
+> `make doctor` 의 *optional backends* 섹션으로 확인한다. macOS 복구: `brew install libomp`.
 
 ---
 
@@ -224,6 +226,8 @@ pytest              # 테스트
 | 테스트에서 `샘플 파일 없음` 으로 skip | `make samples` 또는 `python scripts/generate_samples.py` |
 | 학습 시 `ValueError: 타깃이 충분히 구별되지 않습니다` | 데이터셋 유니크 값 / 행 수가 부족. `samples/classification.csv` 로 먼저 확인 |
 | Streamlit 포트 충돌 | `streamlit run app.py --server.port 8502` |
+| 학습 알고리즘 후보에 XGBoost/LightGBM 이 안 보임 | `make doctor` 로 사유 확인. macOS 에서 `libomp` 누락이면 `brew install libomp` 후 앱 재시작 |
+| `XGBoostError: libxgboost.dylib could not be loaded` / `libomp.dylib` 관련 OSError | 위와 동일 — macOS OpenMP 런타임 누락. `brew install libomp` (Linux 는 `apt install libgomp1`) |
 
 ---
 
