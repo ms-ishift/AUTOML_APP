@@ -1,0 +1,73 @@
+---
+description: Streamlit UI 레이어 규칙 (페이지, 세션, 성능)
+globs: app.py,pages/**/*.py
+alwaysApply: false
+---
+
+# Streamlit UI 규칙
+
+UI는 **입력 바인딩 + Service 호출 + 결과 렌더링**만 담당한다.
+
+## 세션 상태
+
+공식 키만 사용한다(`ARCHITECTURE.md` §4.3). 그 외 키 사용 금지.
+
+```python
+from utils.session_utils import get_state, set_state
+
+project_id = get_state("current_project_id")
+if project_id is None:
+    st.warning("프로젝트를 먼저 선택하세요.")
+    st.stop()
+```
+
+임시 위젯 값 외에 `st.session_state["random_key"] = ...` 직접 대입 금지.
+
+## 페이지 스켈레톤
+
+```python
+import streamlit as st
+from services.training_service import run_training
+from ml.schemas import TrainingConfig
+from utils.errors import AppError
+from utils.session_utils import get_state, flash
+
+st.title("학습 설정")
+
+project_id = get_state("current_project_id")
+dataset_id = get_state("current_dataset_id")
+if not (project_id and dataset_id):
+    st.info("먼저 프로젝트와 데이터셋을 선택해주세요.")
+    st.stop()
+
+# ... 위젯으로 config 구성 ...
+
+if st.button("AutoML 실행", type="primary"):
+    try:
+        result = run_training(TrainingConfig(...))
+        flash("success", "학습이 완료되었습니다.")
+        st.session_state["last_training_job_id"] = result.job_id
+        st.switch_page("pages/04_results.py")
+    except AppError as e:
+        flash("error", str(e))
+        st.error(str(e))
+```
+
+## 성능 (NFR-003)
+
+- 데이터 미리보기/프로파일 등 반복 계산은 `@st.cache_data`, 모델/리소스 로드는 `@st.cache_resource`.
+- 5만 행 이상 DataFrame을 `st.dataframe`에 그대로 넘기지 말 것 — `df.head(n)` 사용.
+- 장시간 작업은 `st.status(...)` 또는 `st.progress`로 진행 상태를 표시(FR-065).
+
+## 금지 사항
+
+- `pages/*.py`에서 `sqlalchemy`, `joblib`, `sklearn` import ❌
+- `st.experimental_*` 신규 사용 ❌ (정식 API 사용)
+- 페이지 간 데이터 전달을 `st.query_params` 이외의 글로벌 변수로 처리 ❌ — `session_state` 공식 키 사용
+- 파일 업로드 파일을 직접 저장 ❌ → `dataset_service.upload_dataset()` 호출
+
+## 사용자 메시지 (FR-003)
+
+- 성공: `st.success` + `flash("success", ...)`
+- 경고/검증: `st.warning`
+- 실패: `st.error` + 상세는 expander로 숨김 (운영 로그는 logger에만)

@@ -1,0 +1,123 @@
+---
+description: ML 엔진 모듈 규칙 (순수 함수, 파이프라인, 아티팩트)
+globs: ml/**/*.py
+alwaysApply: false
+---
+
+# ML 엔진 규칙
+
+`ml/` 은 **순수 계산 모듈**이다. UI/DB 의존 금지.
+
+## 의존 제한
+
+허용: `pandas`, `numpy`, `scikit-learn`, `xgboost`, `lightgbm`, `joblib`, 표준 라이브러리, `ml/` 내부 모듈.
+
+금지: `streamlit`, `sqlalchemy`, `repositories/*`, `services/*`.
+
+이 제약이 깨지면 단위 테스트가 불가능해진다.
+
+## 전처리 (preprocess.py)
+
+반드시 단일 `sklearn.Pipeline` (또는 `ColumnTransformer` 포함)으로 구성하고, 학습 시 fit한 객체를 **joblib으로 함께 저장**한다.
+
+```python
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+def build_preprocessor(num_cols: list[str], cat_cols: list[str]) -> Pipeline:
+    numeric = Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler()),
+    ])
+    categorical = Pipeline([
+        ("imputer", SimpleImputer(strategy="most_frequent")),
+        ("onehot", OneHotEncoder(handle_unknown="ignore")),
+    ])
+    return ColumnTransformer([
+        ("num", numeric, num_cols),
+        ("cat", categorical, cat_cols),
+    ])
+```
+
+## 알고리즘 레지스트리 (registry.py)
+
+신규 알고리즘은 Spec 추가로만 등록 (OCP).
+
+```python
+from dataclasses import dataclass
+from typing import Callable, Any
+
+@dataclass(frozen=True)
+class AlgoSpec:
+    name: str
+    factory: Callable[[], Any]       # estimator 생성자
+    task: str                         # "classification" | "regression"
+
+CLASSIFIERS: dict[str, AlgoSpec] = {
+    "logistic_regression": AlgoSpec("logistic_regression", lambda: LogisticRegression(max_iter=1000), "classification"),
+    "random_forest":       AlgoSpec("random_forest",       lambda: RandomForestClassifier(), "classification"),
+    # ...
+}
+```
+
+## 학습 (trainers.py)
+
+- 개별 모델의 학습 실패가 전체를 중단시키지 않는다(NFR-004).
+- 실패 모델은 결과에 `status="failed"` 로 남긴다.
+
+```python
+results: list[TrainedModel] = []
+for spec in specs:
+    try:
+        est = spec.factory()
+        est.fit(X_train, y_train)
+        results.append(TrainedModel(spec.name, est, status="ok"))
+    except Exception as e:
+        logger.exception("train.model_failed", extra={"algo": spec.name})
+        results.append(TrainedModel(spec.name, None, status="failed", error=str(e)))
+return results
+```
+
+## 평가 (evaluators.py)
+
+지표는 사전 정의된 키만 허용하고 방향을 내장한다.
+
+```python
+METRIC_DIRECTION = {
+    "accuracy": "max", "f1": "max", "roc_auc": "max",
+    "rmse": "min", "mae": "min", "r2": "max",
+}
+
+def select_best(scored: list[ScoredModel], metric_key: str) -> ScoredModel:
+    direction = METRIC_DIRECTION[metric_key]
+    reverse = direction == "max"
+    return sorted(scored, key=lambda m: m.metrics[metric_key], reverse=reverse)[0]
+```
+
+## 아티팩트 (artifacts.py)
+
+모델 1개당 고정된 파일 레이아웃(§6.4):
+
+```
+storage/models/<model_id>/
+  ├─ model.joblib
+  ├─ preprocessor.joblib
+  ├─ feature_schema.json
+  └─ metrics.json
+```
+
+- 예측 시 **preprocessor와 model은 반드시 쌍**으로 로드한다 (§10.4).
+- `feature_schema.json` 은 입력 폼 자동생성(FR-082) + 입력 검증(FR-083)의 단일 출처.
+
+## 재현성
+
+- 모든 분할/랜덤 사용 추정기는 `random_state=settings.RANDOM_SEED` 로 고정.
+- 학습 메타정보(sklearn 버전, 샘플 수, 컬럼 해시)를 `metrics.json` 에 기록.
+
+## 금지 사항
+
+- ML 함수가 `st.*` 호출 ❌
+- ML 함수가 DB 세션 인자로 받음 ❌
+- 전역 상태에 학습된 모델 캐시 ❌ (호출자가 명시적으로 저장/로드)

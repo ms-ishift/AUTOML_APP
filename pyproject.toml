@@ -1,0 +1,71 @@
+[project]
+name = "automl-app"
+version = "0.1.0"
+description = "AutoML Streamlit MVP - 정형 데이터 AutoML 플랫폼 (분류/회귀)"
+requires-python = ">=3.11"
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # bugbear
+    "UP",   # pyupgrade
+    "SIM",  # simplify
+    "TCH",  # type-checking imports
+    "C90",  # mccabe complexity
+]
+ignore = [
+    "E501",  # line length (black이 처리)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B011", "TCH001", "TCH002", "TCH003"]  # 런타임 fixture 타입/테스트 import
+"scripts/**" = ["TCH001", "TCH002", "TCH003"]         # 스크립트는 런타임 import
+"pages/**" = ["E402"]                                  # Streamlit st.set_page_config 순서
+
+[tool.ruff.lint.isort]
+known-first-party = ["services", "ml", "repositories", "utils", "config", "pages"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+exclude = ["tests/", "scripts/"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "slow: 오래 걸리는 테스트 (학습 전체 파이프라인)",
+    "integration: DB/파일 I/O 통합 테스트",
+]
+
+[tool.coverage.run]
+source = ["ml", "services"]
+branch = false
+
+[tool.coverage.report]
+# CI 품질 게이트 (IMPLEMENTATION_PLAN §7.5): ml + services 커버리지 60% 이상.
+# 2026-04-20 기준 전체 수트 실측 93%, slow 제외 93%.
+fail_under = 60
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]

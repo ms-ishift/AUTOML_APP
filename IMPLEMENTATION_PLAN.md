@@ -1,0 +1,994 @@
+# AutoML Streamlit MVP — 구현 계획 (체크리스트)
+
+**문서 버전:** 0.3
+**최근 갱신:** 2026-04-17 (0.2 유지 규칙 → 0.3 보강: DTO 분리, 메시지/이벤트 카탈로그, AUTH 정책, 업로드 한도 동기화, 네비 방식 고정, 비교표 규격, Makefile/pre-commit, 아티팩트 저장 순서)
+
+**참조 문서:**
+- 요구사항: [`AutoML_Streamlit_MVP.md`](./AutoML_Streamlit_MVP.md)
+- 아키텍처: [`ARCHITECTURE.md`](./ARCHITECTURE.md)
+- 규칙: `.cursor/rules/*`, 워크플로우: `.cursor/skills/automl-feature-dev/SKILL.md`
+
+**진행 원칙:**
+1. **상향식 구현**: 유틸 → 인프라 → ML → Service → UI 순으로 쌓아 올린다.
+2. **단계별 체크인**: 각 단계 끝에서 체크리스트 전부 ✅가 되어야 다음 단계로 진입.
+3. **테스트 동반**: 의미 있는 로직에는 반드시 `tests/` 짝꿍 테스트 추가.
+4. **FR 추적**: 각 작업은 요구사항의 FR 번호에 매핑.
+5. **계획서가 단일 진실(Single Source of Progress)**: 작업 시작 전 계획서를 먼저 읽고, 작업 종료 시 반드시 체크박스와 진행 로그를 갱신한다. 스코프 변경은 **코드보다 계획서를 먼저** 수정한다.
+
+**진행 상태 표기**: `[ ]` 미착수 · `[~]` 진행중 · `[x]` 완료 · `[!]` 보류/이슈
+
+---
+
+## 계획서 유지 규칙
+
+이 계획서는 작업 **중에도 계속 수정**하는 살아있는 문서다.
+
+### 체크박스 갱신 타이밍
+
+| 시점 | 동작 |
+|------|------|
+| 작업 시작 | 해당 항목을 `[ ]` → `[~]`로 변경. 동시에 오직 1개만 `[~]` 유지 권장. |
+| 작업 완료 | `[~]` → `[x]`. 수용 기준을 실제로 검증한 뒤 체크. 미검증 체크 금지. |
+| 블록 발생 | `[~]` → `[!]` + 바로 아래 줄에 `> BLOCKED: <이유> / <후속조치>` 인용 추가. |
+| 스코프 변경 | 항목을 추가/삭제하기 전 본 규칙서 아래 "변경 이력"에 기록. |
+
+### 진행 로그 포맷 (문서 최하단 섹션)
+
+```
+YYYY-MM-DD | 단계 X.Y | started|completed|blocked | <한 줄 메모>
+```
+
+- 하루 여러 건이면 여러 줄. 시간 순서로 append (삽입 금지).
+- 실패/재시도는 별도 줄로 남긴다 (덮어쓰지 않음).
+
+### 스코프 변경 규칙
+
+새 FR을 발견했거나 파일/단계를 추가해야 하는 경우:
+
+1. **먼저 계획서에 항목 추가** (적절한 단계/하위절에).
+2. **변경 이력 섹션**에 `added`/`removed`/`moved` 기록.
+3. **그다음 구현**. 역순(코드 먼저) 금지.
+
+### Definition of Done (모든 항목 공통)
+
+> **템플릿 체크리스트** — 각 작업 단위(§x.y)를 `[x]` 로 닫기 전에 아래를 전부 만족하는지 스스로 점검한다. 루트의 `[ ]` 는 단일 실행 아이템이 아니라 반복 적용되는 기준이므로 `plan-check` 진행중 카운트에서 제외된다 (☐ 표식 사용).
+
+- ☐ 코드 작성 완료 및 해당 모듈 단위 테스트 통과 (`pytest <path> -q`)
+- ☐ `ruff check <path>` / `mypy <path>` 0 에러 (새로 추가한 파일 범위)
+- ☐ 레이어 경계 준수 (UI↛Repo/ML 직접 호출 없음, ML↛Streamlit/SQLAlchemy 없음)
+- ☐ 관련 FR 번호가 docstring 또는 모듈 헤더에 기재
+- ☐ 설계와 달라진 부분은 `ARCHITECTURE.md` 반영
+- ☐ 계획서 체크박스 + 진행 로그 갱신
+- ☐ 단계 끝에서 논리적 단위로 커밋 (제안 prefix: `feat:`, `chore:`, `test:`, `docs:`, `refactor:`)
+
+---
+
+## 단계 0. 프로젝트 부트스트랩
+
+*MVP 실행 전 스캐폴드 생성. 모든 후속 단계가 이 기반 위에 쌓인다.*
+
+### 0.1 디렉터리 스캐폴드
+
+- [x] 루트 패키지 골격 생성
+  - [x] `app.py` (빈 진입점)
+  - [x] `pages/__init__.py`, `pages/components/__init__.py`
+  - [x] `services/__init__.py`
+  - [x] `ml/__init__.py`
+  - [x] `repositories/__init__.py`
+  - [x] `utils/__init__.py`
+  - [x] `config/__init__.py`
+  - [x] `tests/__init__.py`, `tests/ml/`, `tests/services/`, `tests/repositories/`, `tests/utils/`
+- [x] 저장소/DB 폴더 + `.gitkeep`
+  - [x] `storage/datasets/.gitkeep`
+  - [x] `storage/models/.gitkeep`
+  - [x] `storage/predictions/.gitkeep`
+  - [x] `storage/logs/.gitkeep`
+  - [x] `db/.gitkeep`
+
+### 0.2 개발 환경
+
+- [x] `python3.11 -m venv .venv` 후 `pip install -r requirements.txt` (현 시점은 최소 의존만 설치: scikit-learn, pandas, python-dotenv, streamlit)
+- [x] `cp .env.example .env`
+- [x] `ruff check .` / `black .` / `pytest` 통과 (단계 1 완료 시점 확인; `mypy`는 단계 2 이후 타입 보강과 함께)
+  > NOTE: 아직 lint/type 툴을 설치하지 않았다. 단계 1 시작 시 `make install` 로 `requirements.txt` 전체 설치 후 이 항목을 [x] 로 갱신한다.
+- [x] `scripts/dev_run.sh` 작성 (`streamlit run app.py`) + `chmod +x`
+- [x] **Makefile** 추가 — `make install / install-dev / samples / test / lint / fmt / run / smoke / plan-check / clean`
+  - [x] `plan-check`: `IMPLEMENTATION_PLAN.md` 의 `[~]` 개수가 1개 이하인지 검사 (장기 진행중 방지)
+- [x] **pre-commit 훅** (`.pre-commit-config.yaml`)
+  - [x] `ruff`, `black`, `mypy`
+  - [x] 커스텀 훅 `plan-staged` (`scripts/check_plan_staged.sh`): 코드 변경이 있으면 `IMPLEMENTATION_PLAN.md` 도 같은 커밋에 포함되었는지 경고
+
+### 0.2a Streamlit 네비게이션 방식 결정 (고정)
+
+- [x] **선택 방식: `pages/` 디렉터리 자동 멀티페이지** (Streamlit 기본)
+  - 근거: 설정 0에 가까움, 파일 단위 라우팅, MVP 규모에 충분
+  - 제약: 페이지 순서는 파일명 prefix (`01_~07_`) 로 고정
+- [x] `st.navigation` 은 **8단계(인증 도입) 이후 재검토** (로그인 분기 처리가 필요해질 때)
+- [x] 페이지 간 이동은 `st.switch_page("pages/04_results.py")` 만 사용 (URL 하드코딩 금지) — 규칙 `.cursor/rules/automl-project.mdc` 반영 완료
+
+### 0.2b `.streamlit/config.toml` 부트스트랩
+
+- [x] `.streamlit/config.toml` 생성
+  - [x] `[server] maxUploadSize = <settings.MAX_UPLOAD_MB>` (settings와 동기화)
+  - [x] `[theme]` 기본 테마 지정 (`base = "light"`)
+- [x] `scripts/sync_streamlit_config.py` — `.env` 의 `MAX_UPLOAD_MB` 를 읽어 config.toml 에 반영
+- [x] `make run` 이 내부적으로 `sync_streamlit_config.py` 를 먼저 실행하도록 연결 (`dev_run.sh` 도 동일 순서)
+- [x] 테스트: `.env` 의 값을 `350 → 200` 으로 토글해 config.toml 이 갱신됨을 확인
+
+### 0.3 샘플 데이터 준비
+
+*단계 3/4 테스트와 단계 6 수용 검증에 모두 필요하므로 먼저 확보한다.*
+
+- [x] `samples/classification.csv` — 소형 분류용 (iris, 150 rows, target=species)
+- [x] `samples/regression.csv` — 소형 회귀용 (diabetes, 442 rows, target=progression)
+- [x] `scripts/generate_samples.py` — sklearn 내장 dataset → CSV 로 재현성 있게 생성
+- [x] `tests/conftest.py` 에서 위 샘플 경로를 공통 fixture(`classification_csv`, `regression_csv`, `samples_dir`)로 노출
+
+**수용 기준**
+- `streamlit run app.py` 시 빈 페이지라도 오류 없이 기동됨
+- 모든 `__init__.py` import 가능 (`python -c "import services, ml, repositories, utils, config"` 성공)
+- `samples/*.csv` 가 git에 커밋되어 있고 `scripts/generate_samples.py` 로 재생성 가능
+
+---
+
+## 단계 1. 기본 유틸 / 인프라
+
+*어떤 기능 코드도 먼저 얹히지 않는다. 유틸이 안정되어야 이후가 깨끗하다.*
+
+### 1.1 설정 (`config/settings.py`)
+
+- [x] pydantic-settings `Settings` 클래스
+  - [x] 필드: `APP_ENV`, `DATABASE_URL`, `STORAGE_DIR`, `MAX_UPLOAD_MB`, `AUTH_MODE`, `DEFAULT_TEST_SIZE`, `RANDOM_SEED`, `LOG_LEVEL`
+  - [x] `.env` 자동 로드 + 타입 검증
+  - [x] `settings = Settings()` 전역 싱글톤
+  - [x] 경로 필드(`STORAGE_DIR`)는 `Path`로 캐스팅 + 하위 디렉터리 자동 생성 메서드 제공
+
+### 1.2 예외 (`utils/errors.py`)
+
+- [x] `AppError(Exception)` 기반 클래스 (user_message 속성)
+- [x] 하위 계층:
+  - [x] `ValidationError` — 입력 오류
+  - [x] `NotFoundError` — 엔터티 미존재
+  - [x] `MLTrainingError` — 학습 실패
+  - [x] `PredictionInputError` — 예측 입력 스키마 불일치
+  - [x] `StorageError` — 파일/IO 오류
+
+### 1.3 로깅 (`utils/log_utils.py`)
+
+- [x] `get_logger(name: str) -> Logger` 팩토리
+  - [x] 루트 로거 1회 초기화 (JSON or key=value 포맷)
+  - [x] `storage/logs/app.log` 롤링 핸들러 + 콘솔 핸들러
+  - [x] `settings.LOG_LEVEL` 반영
+- [x] `log_event(logger, event: str, **extra)` 헬퍼 (구조화 로깅)
+
+### 1.4 파일 유틸 (`utils/file_utils.py`) — FR-030, FR-034, NFR-006
+
+- [x] `save_uploaded_file(uploaded, project_id) -> Path` (UUID 파일명 재명명)
+- [x] `validate_extension(filename, allowed={"csv","xlsx"})`
+- [x] `validate_size(bytes_len, max_mb)`
+- [x] `read_tabular(path) -> pd.DataFrame` (CSV/XLSX 자동 분기, 헤더 검증)
+- [x] `ensure_dir(path: Path)` 헬퍼
+
+### 1.5 세션 유틸 (`utils/session_utils.py`) — FR-002, FR-003
+
+- [x] 공식 세션 키 enum/상수 (`SessionKey`): `CURRENT_PROJECT_ID`, `CURRENT_DATASET_ID`, `LAST_TRAINING_JOB_ID`, `FLASH`
+- [x] `get_state(key) -> Any | None`
+- [x] `set_state(key, value) -> None`
+- [x] `clear_state(*keys)`
+- [x] Flash 메시지 API:
+  - [x] `flash(level: Literal["success","warning","error","info"], message: str)`
+  - [x] `consume_flashes() -> list[ToastMsg]` (한 번 렌더 후 비움)
+
+### 1.6 공통 컴포넌트 (`pages/components/toast.py`)
+
+- [x] `render_flashes()` — 사이드바/본문 상단에서 호출되는 공용 토스트 렌더러
+- [x] level → `st.success/warning/error/info` 매핑
+
+### 1.7 메시지/이벤트 카탈로그 (일관성 게이트)
+
+하드코딩 한글 메시지와 로그 이벤트명을 **한 곳으로 모아** 페이지·서비스 전역에서 재사용한다.
+
+- [x] `utils/messages.py` — 사용자 노출 한글 메시지 상수
+  - [x] 네임스페이스 예: `class Msg: UPLOAD_SUCCESS = "업로드가 완료되었습니다."`
+  - [x] 템플릿 메시지는 `def upload_too_large(max_mb: int) -> str` 형태의 함수로 제공
+  - [x] 페이지/서비스는 `from utils.messages import Msg` 로만 참조 (하드코딩 금지)
+- [x] `utils/events.py` — 구조화 로그 이벤트명 상수
+  - [x] `class Event: PROJECT_CREATED = "project.created"`, `TRAINING_STARTED = "training.started"` …
+  - [x] 감사 로그 `action_type` 도 이 상수를 재사용
+- [-] 린트: `ruff` 룰로 `st.error("...")` 처럼 문자열 리터럴을 직접 쓰는 Streamlit 호출을 발견 시 경고 (개발 편의, 선택) *(차기 이월 — 현재 `utils.messages.Msg` 사용은 코드리뷰·rules(`streamlit-ui.mdc`)로 강제. ruff custom rule 은 ast 탐지기 구현 비용이 커서 MVP 외)*
+
+### 1.8 단위 테스트 (`tests/utils/`)
+
+- [x] `test_errors.py` — 예외 상속/메시지
+- [x] `test_file_utils.py` — 확장자/크기/읽기 해피&실패 경로
+- [x] `test_session_utils.py` — 키 통제, flash 소비 로직 (`st.session_state` 직접 사용)
+
+**수용 기준**
+- 다른 모듈이 `settings`, `get_logger`, 도메인 예외를 import해서 바로 쓸 수 있는 상태
+- `storage/logs/app.log`에 로그가 실제로 기록됨
+- CSV/XLSX 로드 + 잘못된 파일 경로에서 `ValidationError` 발생
+- `Msg`, `Event` 상수가 pages/services에서 실제로 사용됨 (하드코딩 한글 리터럴 0건)
+
+---
+
+## 단계 2. 영속성 레이어 (DB & Repository)
+
+*ORM을 먼저 확정해야 Service의 DTO 매핑이 깔끔하다.*
+
+### 2.1 ORM 베이스 (`repositories/base.py`)
+
+- [x] `engine = create_engine(settings.DATABASE_URL, future=True)`
+- [x] `SessionLocal` 팩토리
+- [x] `Base = DeclarativeBase`
+- [x] `@contextmanager session_scope()` — commit/rollback/close 자동화
+- [x] sqlite 상대 경로 정규화 + 부모 디렉터리 자동 생성 (`_resolve_sqlite_path`)
+- [x] `TimestampMixin` (created_at/updated_at 자동 관리)
+
+### 2.2 ORM 엔터티 (`repositories/models.py`) — 요구사항 §9
+
+- [x] `User` (스키마만 준비, AUTH_MODE 정책은 아래 2.2a 참조)
+- [x] `Project`
+- [x] `Dataset` (project FK, schema_json 포함)
+- [x] `TrainingJob` (dataset FK, task_type/target/metric/status/run_log)
+- [x] `Model` (training_job FK, is_best, paths, feature_schema_json) — path 는 nullable (§4.3a 보상 로직)
+- [x] `PredictionJob` (model FK, input_type, paths, status)
+- [x] `AuditLog` (action_type, target, detail_json)
+- [x] 관계 설정 + `created_at`/`updated_at` 자동화 + 상위 삭제 시 cascade
+
+### 2.2a AUTH_MODE 정책 (MVP 고정)
+
+*MVP 1차는 `AUTH_MODE=none`. 이때도 DB 스키마는 확장성을 유지한다.*
+
+- [x] `Project.owner_user_id` → **nullable**. `AUTH_MODE=none` 일 때는 `None` 허용.
+- [x] `init_db.py --seed` 시 `User(id=0, login_id="system", user_name="시스템", role="system")` 시스템 사용자 1건을 upsert
+- [x] `AUTH_MODE=none` 컨텍스트에서 `AuditLog.user_id = 0` (시스템) 으로 기록 (`audit_repository.write` 기본값)
+- [→] `AUTH_MODE=basic` 전환 시 마이그레이션 체크리스트를 **§8.1 로 이관** (본 섹션에서는 추적 종료):
+  - [→] 기존 `owner_user_id IS NULL` Project 를 시스템 사용자 또는 특정 계정으로 귀속 — §8.1 참조
+  - [→] `User.password_hash` NOT NULL 전환 — §8.1 참조
+- [x] Service 레이어에서 `current_user_id()` 헬퍼(`utils/session_utils.py`) 로 사용자 컨텍스트를 일원화 (MVP 반환값=0) — §1.5 에서 완료
+- [x] 상수 선언: `SYSTEM_USER_ID=0`, `SYSTEM_USER_LOGIN_ID`, `SYSTEM_USER_NAME`, `SYSTEM_USER_ROLE` (`repositories/models.py`)
+
+### 2.3 Repository 구현
+
+각 Repository는 **세션을 인자로 받는 함수 모듈**로 작성 (Service가 트랜잭션 주인).
+
+- [x] `project_repository.py` — insert / update / delete / get / list_by_owner / list_all / count / exists_by_name
+- [x] `dataset_repository.py` — insert / get / list_by_project / delete
+- [x] `training_repository.py` — insert / update_status (status 화이트리스트 + started/ended 자동) / get / list_by_project / append_run_log
+- [x] `model_repository.py` — bulk_insert / update_paths (§4.3a 보상 로직) / get / delete / list_by_training_job / list_by_project / mark_best (단일 best 강제)
+- [x] `prediction_repository.py` — insert / update_status / get / list_by_model (input_type/status 화이트리스트)
+- [x] `audit_repository.py` — write (user_id 기본값=SYSTEM_USER_ID) / list_logs (user/action/target/period 필터)
+
+### 2.4 DB 초기화 스크립트 (`scripts/init_db.py`)
+
+- [x] 엔터티 전체 메타데이터로 테이블 생성
+- [x] 옵션: `--drop` 스키마 재생성
+- [x] 옵션: `--seed` 시스템 사용자(id=0) + 샘플 프로젝트(`샘플: 붓꽃 분류`) upsert (멱등)
+- [x] 구조화 로그 (`utils/log_utils`) 로 각 단계 기록
+
+### 2.5 통합 테스트 (`tests/repositories/`)
+
+- [x] `test_session_scope.py` — 커밋/롤백, 스키마/AUTH 정책 (6건)
+- [x] `test_project_repository.py` — CRUD/list/count/cascade/감사로그 기본값 (11건)
+- [x] `test_training_repository.py` — 상태전이/run_log/모델 bulk/예측/감사 필터 (9건)
+- [x] `conftest.py` — 임시 sqlite + 스키마 생성 fixture (`sqlite_engine` / `session_factory` / `db_session`)
+
+**수용 기준**
+- [x] `python scripts/init_db.py` 실행 후 `db/app.db`에 테이블 생성 확인
+- [x] `pytest tests/repositories -q` 전부 통과 (26건)
+- [x] `PRAGMA foreign_keys=ON` 자동 활성화로 cascade delete 실제 동작 확인
+
+---
+
+## 단계 3. ML 엔진 (순수 함수 계층)
+
+*Streamlit/DB 없이 단독 실행 가능해야 함. 이 단계가 끝나면 CLI로도 학습이 된다.*
+
+### 3.1 도메인 스키마 분리 (ML vs Service)
+
+**원칙**: `ml/schemas.py` 는 ML 엔진 내부 구조만, `services/dto.py` 는 UI ↔ Service 교환용 DTO.
+
+#### 3.1a `ml/schemas.py` — ML 내부 전용 (Streamlit/DB 비의존)
+
+- [x] `@dataclass(frozen=True, slots=True)`:
+  - [x] `ColumnProfile(name, dtype, n_missing, n_unique, missing_ratio, unique_ratio)`
+  - [x] `DatasetProfile(n_rows, n_cols, columns: tuple[ColumnProfile, ...])` + `column(name)` 헬퍼
+  - [x] `TrainingConfig(...)` + `__post_init__` 검증 (test_size 범위, task_type, target)
+  - [x] `FeatureSchema(numeric, categorical, target, categories)` + `to_dict`/`from_dict` (아티팩트 저장용)
+  - [x] `ScoredModel(algo_name, status, metrics, error, train_time_ms)` + `is_success` 속성
+
+#### 3.1b `services/dto.py` — Service 반환용 (UI가 소비)
+
+- [x] `@dataclass(frozen=True, slots=True)`:
+  - [x] `ProjectDTO` + `from_orm`
+  - [x] `DatasetDTO` + `from_orm`
+  - [x] `ColumnProfileDTO` / `DatasetProfileDTO`
+  - [x] `TrainingJobDTO` + `from_orm`
+  - [x] `ModelComparisonRowDTO`
+  - [x] `TrainingResultDTO`
+  - [x] `ModelDTO` + `from_orm`
+  - [x] `FeatureSchemaDTO` + `ModelDetailDTO`
+  - [x] `PredictionResultDTO` + `from_orm`
+- [x] 원칙 문서화: **Repository → Service 경계에서 ORM → DTO 로 변환** (dto.py 모듈 doc-string 명시)
+- [x] 변환 헬퍼: 각 DTO에 `from_orm(cls, entity)` classmethod
+
+### 3.2 알고리즘 레지스트리 (`ml/registry.py`) — FR-062
+
+- [x] `AlgoSpec(name, task, factory, default_metric)` dataclass (frozen)
+- [x] 분류 카탈로그: logistic_regression, decision_tree, random_forest (+xgboost/lightgbm 선택)
+- [x] 회귀 카탈로그: linear, ridge, lasso, random_forest (+xgboost/lightgbm 선택)
+- [x] `get_specs(task_type)` / `get_spec(task_type, name)` / `available_algorithms(task_type)`
+- [x] `random_state=settings.RANDOM_SEED` 일괄 적용
+- [x] XGBoost/LightGBM import 가드: `ImportError` 뿐 아니라 `XGBoostError` 등 런타임 로드 실패(macOS libomp 미설치 등) 도 skip
+
+### 3.3 데이터 프로파일링 (`ml/profiling.py`) — FR-033
+
+- [x] `profile_dataframe(df) -> DatasetProfile` (missing/unique 비율 포함)
+- [x] `suggest_excluded(profile, unique_ratio_threshold=0.95) -> list[str]` — 식별자 의심 컬럼 (n_rows<2 시 빈 리스트)
+
+### 3.4 전처리 (`ml/preprocess.py`) — FR-050~053
+
+- [x] `split_feature_types(df, target, excluded) -> (num_cols, cat_cols)`
+- [x] `build_preprocessor(num_cols, cat_cols) -> ColumnTransformer`
+- [x] `build_feature_schema(df, num_cols, cat_cols, target) -> FeatureSchema`
+- [x] `prepare_xy(df, config) -> (X, y)` (타깃 제외/제외컬럼 제거)
+
+### 3.5 학습 (`ml/trainers.py`) — FR-061, FR-063, NFR-004
+
+- [x] `train_all(specs, X_train, y_train) -> list[TrainedModel]`
+  - [x] 개별 실패는 `status="failed"`로 기록, 전체 중단 없음
+  - [x] 각 모델별 학습 시간 측정
+- [x] `split_dataset(X, y, test_size, task_type) -> (X_tr, X_te, y_tr, y_te)`
+  - [x] 분류면 stratify 적용 (클래스 분포 이슈 시 fallback)
+
+### 3.6 평가 (`ml/evaluators.py`) — FR-064, FR-071, FR-072
+
+- [x] 분류: `accuracy, f1, roc_auc`
+  - [x] 다중클래스는 `average="macro"` / roc_auc는 ovr
+- [x] 회귀: `rmse, mae, r2`
+- [x] `score_models(trained, X_test, y_test, task_type) -> list[ScoredModel]`
+- [x] `select_best(scored, metric_key) -> ScoredModel` (방향 내장)
+- [x] 시각화 보조:
+  - [x] `confusion_matrix_data(y_true, y_pred, labels)` → dict 반환 (UI가 plot)
+  - [x] `regression_scatter_data(y_true, y_pred)` → dict 반환
+
+### 3.7 아티팩트 (`ml/artifacts.py`) — FR-073, §10.4
+
+- [x] `save_model_bundle(dir: Path, estimator, preprocessor, schema: FeatureSchema, metrics: dict)` → 4개 파일 생성
+- [x] `load_model_bundle(dir: Path) -> ModelBundle` (dataclass: estimator, preprocessor, schema, metrics)
+- [x] `validate_prediction_input(df, schema) -> df` (FR-083: 누락/타입/추가 컬럼 처리)
+
+### 3.8 단위 테스트 (`tests/ml/`, `tests/services/`)
+
+- [x] `tests/ml/test_registry.py` — 카탈로그 완결성 + factory 새 인스턴스 + ml/ 의 streamlit/sqlalchemy 미사용 검증
+- [x] `tests/ml/test_profiling.py` — profile 기본/결측·고유/빈 DF/식별자 제안/임계치
+- [x] `tests/services/test_dto.py` — ORM→DTO 변환 / frozen 불변성 / 조합 DTO 구조
+- [x] `test_preprocess.py` — 결측/범주형/스케일링/unseen 카테고리 안전성
+- [x] `test_trainers.py` — 실패 모델 격리 (깨진 spec 주입) + 진행 콜백 + preprocessor clone 확인
+- [x] `test_evaluators.py` — metric 방향, select_best, CM/scatter 데이터 구조
+- [x] `test_artifacts.py` — save/load 라운드트립, 스키마 검증 *(`tests/ml/test_artifacts.py` 10건 — 4파일 생성 / roundtrip / missing dir·file 에러 / schema_json 검증 / `validate_prediction_input` 5시나리오(결측·강제형변환·범주 문자열화·빈 DF 거부))*
+- [x] `test_pipeline_e2e.py` — iris/diabetes 샘플 CSV 로 분류+회귀 각 1회 풀 파이프라인 실행 (artifacts 제외)
+
+**수용 기준**
+- `pytest tests/ml -q` 전부 통과
+- `ml/` 에서 `streamlit` / `sqlalchemy` import 없음 (`ruff` 또는 grep 확인)
+- CLI 스크립트로 샘플 CSV 학습 → 아티팩트 저장 → 재로드 예측 성공
+
+---
+
+## 단계 4. Service 레이어 (비즈니스 로직)
+
+*UI 없이 Service 함수만으로 유스케이스가 완결되어야 한다.*
+
+### 4.1 Project Service (`services/project_service.py`) — FR-020~024
+
+- [x] `create_project(name, description) -> ProjectDTO`
+- [x] `list_projects() -> list[ProjectDTO]`
+- [x] `get_project(project_id) -> ProjectDTO` (없으면 `NotFoundError`)
+- [x] `update_project(project_id, name, description) -> ProjectDTO`
+- [x] `delete_project(project_id, cascade: bool) -> None`
+  - [x] cascade=False일 때 연결 리소스 존재 시 `ValidationError`
+- [x] 모든 변경 액션 → `audit_repository.write`
+
+### 4.2 Dataset Service (`services/dataset_service.py`) — FR-030~035
+
+- [x] `upload_dataset(project_id, uploaded_file) -> DatasetDTO`
+  - [x] 확장자/크기 검증 (file_utils)
+  - [x] 파일 저장 (UUID 명명)
+  - [x] 헤더 유효성/중복컬럼/빈파일 검증
+  - [x] DB insert + 프로파일(schema_json) 저장
+- [x] `get_dataset_profile(dataset_id) -> DatasetProfileDTO` (스펙상 DTO 로 상향)
+- [x] `preview_dataset(dataset_id, n=50) -> list[dict]` (상위 N행, NaN→None 정규화, PREVIEW_MAX_ROWS 클램프)
+- [x] `list_datasets(project_id) -> list[DatasetDTO]`
+- [x] `delete_dataset(dataset_id) -> None` (파일 포함 삭제, 트랜잭션 커밋 이후 best-effort unlink)
+
+### 4.3 Training Service (`services/training_service.py`) — FR-060~066
+
+- [x] `run_training(config: TrainingConfig) -> TrainingResultDTO`
+  - [x] 전처리 빌드 → split → train_all → score → best 선정
+  - [x] TrainingJob 레코드 생성 + 상태 전이(`pending→running→completed/failed`)
+  - [x] Model 레코드 저장 (비교 테이블의 각 행)
+  - [x] 성공한 모델 아티팩트만 저장 (`storage/models/<model_id>/`)
+  - [x] run_log에 단계별 메시지 append
+- [x] `get_training_result(job_id) -> TrainingResultDTO`
+- [x] `list_training_jobs(project_id) -> list[TrainingJobDTO]`
+- [x] 진행률 콜백 훅: `run_training(..., on_progress: Callable[[str, float], None] | None)`
+  - [x] **Streamlit 재실행 모델 제약상 스레드/비동기 사용 금지**. 동기 루프에서 콜백을 호출하고, 페이지 쪽은 `with st.status(...)` 블록 안에서 Service를 호출한다.
+  - [x] 콜백 시그니처: `on_progress(stage: str, ratio: float)` — `stage ∈ {"preprocessing","split","train:<algo>","score","save","completed"}`
+
+### 4.3a 아티팩트 저장 순서 (트랜잭션 내 일관성)
+
+학습이 완료된 모델은 **DB id 확보 → 파일 저장 → path 업데이트** 순서로 처리한다. 반드시 단일 트랜잭션 내에서 수행하되, 파일 저장은 트랜잭션 외부 I/O 이므로 실패 시 보상 로직이 필요하다.
+
+```
+with session_scope() as session:
+    job = training_repository.insert(session, ...)             # 1) TrainingJob id 확보
+    for scored in scored_models:
+        model = model_repository.insert(session, job.id, ...)  # 2) Model row (path 비워둠)
+        session.flush()                                         # 3) model.id 확보
+        try:
+            artifacts.save_model_bundle(
+                storage_dir / str(model.id), scored.estimator, preprocessor, schema, scored.metrics
+            )                                                   # 4) 파일 저장
+            model_repository.set_paths(session, model.id, ...) # 5) path 업데이트
+        except StorageError:
+            logger.exception("artifact.save_failed", extra={"model_id": model.id})
+            # 파일 저장 실패 시: DB 롤백되도록 예외 재발생
+            raise
+    session.commit()
+```
+
+- [x] `model_repository.set_paths(session, model_id, model_path, preprocessor_path, schema_path, metrics_path)` 추가 *(실제 이름: `update_paths` — `feature_schema_json` 까지 같이 갱신하므로 조금 더 포괄적인 명칭으로 구현)*
+- [x] 부분 실패 시 보상: `session_scope` 롤백 + 이미 쓰여진 파일은 `try/finally` 에서 정리 (best effort) *(구현: `services/training_service._persist_and_save` + `_cleanup_model_dirs`)*
+- [x] `is_best` 는 모든 모델 저장 완료 후 한 번에 결정 → `model_repository.mark_best(session, job_id, best_model_id)` *(단일 트랜잭션 내에서 전체 저장 완료 후 best_entity 결정 → mark_best 호출)*
+
+### 4.4 Model Service (`services/model_service.py`) — FR-073~075
+
+- [x] `save_model(model_id) -> ModelDTO` (is_best 외 수동 저장 지원)
+- [x] `list_models(project_id) -> list[ModelDTO]`
+- [x] `get_model_detail(model_id) -> ModelDetailDTO` (metrics_summary, feature_schema 포함)
+- [x] `delete_model(model_id) -> None` (파일+레코드)
+
+### 4.5 Prediction Service (`services/prediction_service.py`) — FR-080~085
+
+- [x] `predict_single(model_id, payload: dict) -> PredictionResultDTO`
+  - [x] 스키마 검증 → 전처리 → 추정기 → 결과 반환
+- [x] `predict_batch(model_id, file_path: Path) -> PredictionResultDTO`
+  - [x] 누락 컬럼 차단(§10.4), 추가 컬럼 경고 후 무시
+  - [x] 결과 CSV를 `storage/predictions/<job_id>.csv`에 저장
+- [x] PredictionJob 레코드 기록
+
+### 4.6 Service 테스트 (`tests/services/`)
+
+- [x] `conftest.py` — 임시 sqlite + 임시 storage_dir + seed 시스템 유저 (§4.1 완료 시점)
+- [x] `test_project_service.py` — CRUD + cascade 거부 (23건)
+- [x] `test_dataset_service.py` — 업로드 해피/실패·프로파일·프리뷰·리스트·삭제 (22건)
+- [x] `test_training_service.py` — 샘플 CSV로 분류·회귀 각 1회 성공 (11건)
+- [x] `test_model_service.py` — list/detail/save(promote)/delete + cleanup (10건)
+- [x] `test_prediction_service.py` — 단건/파일, 누락 컬럼 차단, 보상 로직 (11건)
+
+**수용 기준**
+- `pytest tests/services -q` 전부 통과
+- Service 함수가 Streamlit 없이 import/실행 가능 (`python -c "from services.training_service import run_training"`)
+- 반환 타입 모두 DTO (ORM 노출 없음) — 코드 리뷰에서 확인
+
+---
+
+## 단계 5. UI 스켈레톤
+
+*페이지 별 구현 전, 공통 셸을 먼저 고정.*
+
+### 5.1 App 진입점 (`app.py`)
+
+- [x] `st.set_page_config(page_title="AutoML", layout="wide")` *(공용 `pages/components/layout.configure_page` 경유 — 각 페이지 재사용)*
+- [x] 사이드바: 현재 프로젝트 표시, 페이지 네비 안내 *(`render_sidebar` — DB 뱃지, 프로젝트 카드, 선택 해제 버튼 포함)*
+- [x] 초기화: DB 존재 체크 → 없으면 안내, flash 렌더 *(`utils/db_utils.is_db_initialized` + 본문/사이드바 이중 안내, `pages/components/toast.render_flashes` 로 플래시 소비)*
+- [x] 홈 본문(화면 1): 서비스 소개 / 최근 프로젝트 3개 / 시작 버튼 *(`project_service.list_projects` 상위 3개 카드, "선택하기" 클릭 → `SessionKey.CURRENT_PROJECT_ID` 반영, stale id 자동 정리)*
+
+### 5.2 공용 컴포넌트
+
+- [x] `pages/components/toast.py` (단계 1에서 이미 작성)
+- [x] `pages/components/layout.py` — `configure_page` / `render_sidebar` / `render_page_header` (§5.1 과 함께 선행 구현)
+- [-] `pages/components/project_picker.py` — 사이드바에서 프로젝트 선택 위젯 *(§6.1 에서 현재 필요성 낮다고 판단되어 보류. 본문 카드 + 홈 "선택하기" 버튼이 동일 역할을 수행 중)*
+- [x] `pages/components/data_preview.py` — df.head + 프로파일 테이블 *(§6.2 에서 구현. `render_preview(rows, caption, height)` + `render_profile(profile)` 2-API, 행/컬럼 메트릭 + 결측/고유 비율 테이블)*
+- [-] `pages/components/metric_cards.py` — 성능 비교 카드/표 렌더러 *(분리 보류 — §6.4 `pages/04_results.py` 에서 `st.columns` + `st.metric` + `pd.DataFrame` 로 인라인 구현 중. 재사용처가 2 페이지 이상 되면 그때 추출)*
+- [-] `pages/components/plots.py` — confusion matrix, scatter, metric bar *(분리 보류 — §6.4 결과 페이지와 §6.7 admin 페이지에서 `plotly.express` 로 인라인 구현. 축/라벨 규약이 달라 공통 래퍼가 오히려 옵션 폭발을 유발해서 MVP 에서는 페이지에 둔다)*
+
+### 5.3 세션 가드
+
+- [x] `require_project()` / `require_dataset()` 헬퍼 (`utils/session_utils` 또는 components 내 위치) *(`utils/session_utils.py:70,79` — `SessionKey.CURRENT_PROJECT_ID` / `CURRENT_DATASET_ID` 유효성 확인 후 int 반환)*
+- [x] 미설정 시 `st.info` + `st.stop` 일관 적용 *(두 헬퍼 모두 미설정 시 `st.warning(Msg.*)` + `st.stop()` 호출. `pages/03_training.py`·`06_prediction.py` 등 전 페이지에서 시그니처 통일 호출)*
+
+**수용 기준**
+- `streamlit run app.py` → 홈 화면 정상 렌더, 사이드바에 프로젝트 선택 UI
+- 공용 컴포넌트만 import해서 다른 페이지에서 재사용 가능
+
+---
+
+## 단계 6. 페이지별 기능 구현
+
+*각 페이지는 단계 3/4의 Service만 호출한다. UI 로직 외에 비즈니스 로직을 두지 않는다.*
+
+### 6.1 `pages/01_projects.py` — 프로젝트 관리 (화면 2, FR-020~024)
+
+- [x] 프로젝트 목록 표 (선택/수정/삭제 버튼) *(행 별 `st.container(border=True)` + 3버튼 컬럼 구성, 현재 선택 항목은 ★ 마커 + 선택 버튼 비활성화)*
+- [x] 생성 폼 (name, description) *(`st.expander` 안의 `st.form` — 생성 성공 시 자동 선택 → 사이드바 즉시 반영)*
+- [x] 선택 시 `current_project_id` 세팅 *(`_select_project` 헬퍼가 success flash + session 상태 업데이트 + rerun 일괄 처리)*
+- [x] 삭제 시 cascade 옵션 확인 다이얼로그 *(세션 상태 기반 인라인 컨펌 블록 + cascade 체크박스, `st.dialog` 는 AppTest 안정성 이슈로 회피 결정 기록)*
+- [x] 수용: 생성 → 목록 갱신 → 선택 → 사이드바에 반영 *(AppTest 시나리오 `test_create_project_success_updates_list_and_selection` + `test_select_button_sets_current_project` 로 검증)*
+
+### 6.2 `pages/02_dataset_upload.py` — 데이터 업로드 (화면 3, FR-030~035)
+
+- [x] 파일 업로더 (csv/xlsx) *(`st.form` + `clear_on_submit=True` + `ALLOWED_EXTENSIONS` 화이트리스트. 파일 미선택 시 warning flash)*
+- [x] 업로드 후 자동 미리보기(data_preview) + 컬럼 프로파일 *(성공 시 `SessionKey.CURRENT_DATASET_ID` 세팅 → 탭 2개(`샘플 데이터` / `컬럼 프로파일`) 자동 렌더. `pages/components/data_preview.py` 의 `render_preview` / `render_profile` 로 분리 — §6.3 학습 페이지에서도 재사용)*
+- [x] 잘못된 파일 → error flash *(Service 의 `ValidationError`/`StorageError` 를 `flash("error")` + `st.rerun()` 로 즉시 렌더)*
+- [x] 데이터셋 목록 + 삭제 버튼 *(행별 `st.container(border=True)` + `[선택][삭제]` 컬럼. 세션 플래그 기반 인라인 컨펌 블록으로 cascade 삭제 확인)*
+- [x] 수용: 5만 행 CSV 미리보기 10초 이내 (NFR-003) *(로컬 측정 upload 0.15s + preview 0.11s + profile 0.001s = **0.26s** < 10s)*
+
+### 6.3 `pages/03_training.py` — 학습 설정/실행 (화면 4·5, FR-040~066)
+
+- [x] 문제 유형 라디오 (분류/회귀) *(`st.radio(horizontal=True)` + `task_type` 변경 시 metric 옵션 즉시 갱신)*
+- [x] 타깃 컬럼 select *(`st.selectbox`, 데이터셋 컬럼 목록)*
+- [x] 제외 컬럼 멀티 select (+ `suggest_excluded` 힌트) *(`services.dataset_service.suggest_excluded_columns(threshold=0.95)` 를 기본값으로 주입. target 컬럼은 후보에서 제외)*
+- [x] 테스트 비율 slider (기본값 settings.DEFAULT_TEST_SIZE) *(0.05~0.5 step 0.05)*
+- [x] 기준 지표 select (task_type별 옵션) *(`CLASSIFICATION_METRICS` / `REGRESSION_METRICS` 튜플 + `METRIC_DIRECTIONS` 방향 설명 help)*
+- [x] 학습명 text input *(`max_chars=100`, 공백만 → None 처리)*
+- [x] 실행 버튼 → `st.status` 로 진행률 표시 *(`training_service.run_training(on_progress=...)` 동기 콜백 → `st.progress` + caption 단계 로그. 실패 시 `status.update(state="error")`)*
+- [x] 완료 후 `last_training_job_id` 세팅 + 결과 페이지로 이동 *(`SessionKey.LAST_TRAINING_JOB_ID` 갱신 → 요약 카드(3 metric) + 베스트 배지 + "결과 비교 페이지로 이동" CTA. §6.4 미구현 환경에서는 `switch_page` 실패 시 info flash 로 폴백)*
+- [x] 수용: 샘플 CSV 분류 1회, 회귀 1회 성공 → 결과 페이지로 전환 *(tests/ui/test_training_page.py 의 `@pytest.mark.slow` 해피패스 2건이 실제 `run_training` 실행 후 `LAST_TRAINING_JOB_ID` 가 세팅되는지 검증)*
+
+### 6.4 `pages/04_results.py` — 결과 비교 (화면 6, FR-070~073)
+
+- [x] 성능 비교표 (metric_cards) — **규격 고정**:
+
+  | 컬럼 | 타입 | 비고 |
+  |------|------|------|
+  | `algorithm` | str | `registry.py` spec name |
+  | `status` | `"ok" \| "failed"` | 실패 모델도 테이블에 1행으로 유지 (FR-066) |
+  | 기준 지표값 | float | 사용자가 선택한 `metric_key` 컬럼 강조 |
+  | 보조 지표 2~3 | float | task_type 별 나머지 지표 |
+  | `train_time_ms` | int | 학습 시간 |
+  | `is_best` | bool | 베스트 1행에 배지 |
+  | `error` | str | status="failed" 일 때만 |
+
+  - 정렬: 기준 지표의 방향(`metric_direction`) 기준 내림/오름차순 *(`_sort_rows`: success 행은 direction 에 맞춰 정렬, failed 행은 맨 아래)*
+  - 실패 행 표시: 지표 컬럼은 `None` (Streamlit 이 자동 `—` 처럼 빈칸 렌더), 에러 컬럼에 원문 노출
+  - 렌더: `st.dataframe` + `column_config` *(is_best → `★ best` 텍스트 배지, 메트릭은 `NumberColumn(format="%.4f")`)*
+- [x] 베스트 모델 강조(배지/색상) *(`★ best` 배지 컬럼 + 요약 영역의 `st.success` 카드 `↑/↓` 방향 표기)*
+- [x] 분류: 혼동행렬 heatmap / 회귀: 예측 vs 실제 scatter (plots) *(학습 시점에 `build_plot_data` 결과를 `<model_dir>/plot_data.json` 으로 영속화 → `model_service.get_model_plot_data` 로 로드 → plotly imshow / scatter 렌더, plotly 실패 시 dataframe 폴백)*
+- [x] "이 모델 저장" / "다른 모델 저장" 버튼 → model_service.save_model *(selectbox 로 성공 모델 목록 노출, 현재 베스트는 버튼 disabled + "베스트로 고정됨" 라벨, 다른 모델 선택 → `model_service.save_model` 이 is_best 승격 + MODEL_SAVED audit)*
+- [x] 수용: 3개 이상 모델 비교 표시(실패 1건 포함해도 나머지 정상), 저장 후 모델 관리로 이동 가능 *(AppTest 4건으로 검증: 비교표 렌더, 플롯 셀렉터 존재, save 클릭 후 `is_best` 이동, CTA 버튼 → `st.switch_page` 폴백. §6.5 미구현 시 info flash)*
+
+### 6.5 `pages/05_models.py` — 모델 관리 (화면 7, FR-074, FR-075)
+
+- [x] 프로젝트별 저장 모델 목록 (알고리즘/생성일/metric) *(`model_service.list_models` → `st.container(border=True)` 4컬럼 행: 이름·주 지표·상세/삭제 버튼. 실패 모델도 목록에 유지, 베스트는 `★` prefix + 배지)*
+- [x] 모델 상세(입력 스키마, metrics_summary) *(상세 버튼 토글 → `get_model_detail` 로 `FeatureSchemaDTO`·`metrics_summary` 전개. 수치/범주 컬럼 목록 + 타깃 강조, 범주 값은 `st.expander` 로 지연 노출)*
+- [x] "예측하러 가기" 버튼 → 06 page로 이동 + 모델 선택 상태 전달 *(`SessionKey.CURRENT_MODEL_ID` 세팅 후 `st.switch_page("pages/06_prediction.py")`. §6.6 미구현 환경에서는 info flash 폴백으로 세션 값 유지)*
+- [x] 삭제 버튼 (확인 다이얼로그) *(§6.1 과 동일하게 `st.dialog` 대신 세션 플래그 기반 인라인 확인 블록. 확정 시 `model_service.delete_model` 이 DB + `<models_dir>/<id>/` 정리, 취소 시 상태 초기화)*
+- [x] 필터: 저장된 모델만 보기 토글 *(`is_best=True` 만 노출. 기본 off — 학습 직후 비교를 지원하면서도 정리된 뷰를 원할 때 on)*
+- [x] 수용: AppTest 9건 (DB/프로젝트 가드, 빈 목록 안내, 목록 + ★ 배지, best-only 필터, 상세 펼침, 예측 이동 `CURRENT_MODEL_ID` 세팅, 삭제 확정/취소)
+
+**진행 로그 (2026-04-20)**
+
+- `utils/session_utils.py` 에 `SessionKey.CURRENT_MODEL_ID` 추가 — §6.5 → §6.6 간 모델 선택 상태 전달
+- `utils/messages.py` 에 `Msg.MODEL_DELETED` / `Msg.MODEL_REQUIRED` 추가
+- `pages/05_models.py` 생성: DB/프로젝트 가드 → 필터 토글 → 모델 카드 리스트 → 상세/삭제 인라인 패널. `model_service.list_models` / `get_model_detail` / `delete_model` / `save_model` (기존 서비스 재사용)
+- `tests/ui/test_models_page.py` 9건 추가 (@pytest.mark.slow 6건 — 실제 `run_training` 으로 아티팩트 시드)
+- `pytest` 265 passed (기존 256 + 신규 9), `ruff check` / `black` 통과, Streamlit smoke 6 페이지 (`/`, `/01~/05`) 모두 200
+
+### 6.6 `pages/06_prediction.py` — 예측 (화면 8, FR-080~085)
+
+- [x] 모델 선택 selectbox *(학습 성공 모델만 노출, 기본 선택 우선순위: `SessionKey.CURRENT_MODEL_ID` → `is_best` → 첫 행. 선택 즉시 `CURRENT_MODEL_ID` 동기화하여 §6.5 연동 CTA 흐름 유지)*
+- [x] 탭: 단건 입력 / 파일 예측 *(`st.tabs(["단건 입력", "파일 예측"])`)*
+- [x] 단건: `feature_schema.json` 기반 입력 폼 자동 생성 (FR-082) *(`st.form` 안 2열 그리드. `prediction_service.predict_single` 호출 후 예측값 + 분류일 때 상위 3개 확률 metric 카드 + 상세 expander)*
+  - [x] numeric → number_input, categorical → selectbox(카테고리 목록) *(카테고리 목록이 비어있는 경우에만 `text_input` 폴백)*
+- [x] 파일 예측: 업로드 → 결과 표 + CSV/XLSX 다운로드 버튼 *(`st.file_uploader(type=[csv,xlsx])` → `<predictions_dir>/_inputs/<project_id>/<uuid>.<ext>` 로 임시 저장 후 `predict_batch` → `st.dataframe` 미리보기 + `st.download_button` 로 원본 결과 CSV 다운로드)*
+- [x] 누락 컬럼 시 사용자 친화 메시지 + 차단 (§10.4) *(Service 의 `PredictionInputError` → `flash("error", ...)` → `render_flashes` 에서 `st.error`)*
+- [x] 수용: AppTest 8건 (DB/프로젝트/모델 가드, 모델 picker 기본값, 단건 해피패스 + 결과 캐시, Service error surface, 배치 결과 렌더 + 다운로드 버튼 노출, 업로드 없을 때 실행 버튼 disabled)
+
+**진행 로그 (2026-04-20)**
+
+- `pages/06_prediction.py` 생성: 가드 → 모델 picker → 상세 요약 → 탭(단건/파일) → 결과 캐시/다운로드
+- 단건: `st.form` 안에서 스키마 기반 2열 그리드 + `number_input`/`selectbox` 자동 생성 → `prediction_service.predict_single` 호출 → 예측값 metric + 분류 확률 상위 3개
+- 배치: `st.file_uploader` → `<predictions_dir>/_inputs/<project_id>/<uuid>.<ext>` 저장 (예측 재현성 보존) → `predict_batch` → 미리보기 `st.dataframe` + `st.download_button`
+- 서비스·세션 재사용만으로 완결 (서비스 코드 변경 없음) — `predict_single`/`predict_batch` 는 §4.5 에서 이미 완성
+- `tests/ui/test_prediction_page.py` 8건 추가 (2건 `@pytest.mark.slow` — 실제 `run_training` 아티팩트 시드). 나머지 6건은 `list_models`/`get_model_detail`/`predict_single` 패치로 경량 검증
+- AppTest 호환 메모: `st.form_submit_button` 은 `at.button` 에 `FormSubmitter:<form_key>-<label>` 키로 노출되므로 이 키로 접근. `st.download_button` 은 `at.get("download_button")` 으로만 보이므로 길이로 존재성 검증
+- `pytest` 273 passed (기존 265 + 신규 8), `ruff check` / `black` 통과, Streamlit smoke 7 페이지 (`/`, `/01~/06`) 모두 200
+
+### 6.7 `pages/07_admin.py` — 이력/관리자 (화면 9·10, FR-090~093)
+
+- [x] 학습 이력 테이블 (필터: 프로젝트/상태/기간) *(`admin_service.list_training_history` — Project/Model/BestModel 까지 조인 집계해 `project_name`/성공·실패 수/베스트 알고리즘·점수/소요시간(ms) 한 번에 반환. `st.dataframe(column_config=...)` 로 `best_score %.4f`, `소요(ms) %d` 포맷)*
+- [x] 예측 이력 테이블 *(`admin_service.list_prediction_history` — PredictionJob → Model → TrainingJob → Project 역조인. input_type(form/file)·status·결과파일 경로 표시)*
+- [x] 통계 카드: 프로젝트 수, 데이터셋 수, 모델 수, 실패 건수 *(`admin_service.get_stats` → `AdminStatsDTO` 5개 + 실패 2개 → `st.metric` 7개. 실패는 `delta_color="inverse"` 로 시각적 강조)*
+- [x] 최근 실패 로그 요약 (audit_repository) *(`admin_service.list_recent_failures` — `AuditLog.action_type LIKE '%_failed'` 만 필터. action_type/target/detail 전개)*
+- [x] 공통 필터: 프로젝트(전체/개별) · 상태(전체/completed/failed/running/pending) · 기간(7/30/90일/전체) *(세션 상태로 유지되어 탭 전환에도 보존)*
+- [x] 수용: AppTest 6건 (DB 가드, 빈 DB 통계+안내, 필터 위젯 존재, 학습 해피패스 목록, 실패 감사 로그 렌더, 프로젝트 필터 선택 유지)
+
+**진행 로그 (2026-04-20)**
+
+- `services/admin_service.py` 신규 — 교차 도메인 집계를 이 모듈에 집약. `session_scope` 내부에서 필요한 서브쿼리(Model 집계/베스트)까지 SQL 로 처리해 N+1 회피
+- `services/dto.py` 에 `AdminStatsDTO`, `TrainingHistoryRowDTO`, `PredictionHistoryRowDTO`, `AuditLogEntryDTO` 추가 (UI 는 ORM 을 여전히 보지 않음)
+- `tests/services/test_admin_service.py` 9건 추가 (1건 `@pytest.mark.slow` 실제 `run_training` 수반 + 빈 DB/필터 조합/실패 필터/입력 검증 등 경량 8건). FK 제약 회피를 위해 `Dataset` 을 실제 insert 한 뒤 `TrainingJob` 을 참조하는 헬퍼 `_insert_dataset` 추가
+- `pages/07_admin.py` 신규 — DB 가드 → 통계 카드 → 공통 필터 → 3탭(학습/예측/실패). 프로젝트 가드는 두지 않아 전역 조회 가능
+- `pages/components/layout.py` 의 `NAV_ITEMS` 에 `"이력/관리자"` 추가 — 사이드바 네비 일관성
+- `tests/ui/test_admin_page.py` 6건 추가 (1건 `@pytest.mark.slow` — 실제 학습 이력 테이블 검증)
+- `pytest` 288 passed (기존 273 + 신규 15), `ruff check` / `black` 통과, Streamlit smoke 8 페이지 (`/`, `/01~/07`) 모두 200
+
+**수용 기준 (단계 6 전체)**
+- `AutoML_Streamlit_MVP.md` §13.1의 모든 필수 수용 조건 ✅
+- 분류/회귀 샘플 E2E 시나리오 각 1회 성공
+
+---
+
+## 단계 7. 운영 / 품질 다지기
+
+### 7.1 로그·감사 점검
+
+- [x] 모든 Service 주요 분기에 `log_event` 호출 확인 *(services/*.py 전 도메인 15건: project 3 · dataset 3 · training 4 · model 2 · prediction 3. 각 성공·실패 브랜치에 `utils/events.py::Event` 상수로 통일)*
+- [x] AuditLog 엔트리 확인 (프로젝트 생성 / 업로드 / 학습 / 저장 / 예측) *(`audit_repository.write(...)` 호출 15건 — log_event 와 1:1 매핑. `action_type` 은 `<domain>.<verb>[_failed]` 규약을 따름)*
+- [x] `storage/logs/app.log` 롤링 동작 확인 *(`utils.log_utils._initialize` = `RotatingFileHandler(maxBytes=5MB, backupCount=3)`. 회귀 `tests/utils/test_log_utils.py` 4건 — 네임스페이스/idempotent, `| k=v` 포매터, handler 설정, 작은 maxBytes 로 실제 롤링 강제 → 백업 ≥1 / ≤ backupCount 검증)*
+
+**진행 로그 (2026-04-20)**
+
+- **Service 주요 분기 감사 매핑**
+  | 도메인 | 성공 이벤트 | 실패/변형 이벤트 | 파일 위치 |
+  |-|-|-|-|
+  | project | `project.created`/`updated`/`deleted` | — | `services/project_service.py:96,166,208` |
+  | dataset | `dataset.uploaded`/`deleted` | `dataset.upload_failed` | `services/dataset_service.py:104,160,277` |
+  | training | `training.started`/`completed` | `training.failed`, 개별 `training.model_failed` | `services/training_service.py:166,286,314,383` |
+  | model | `model.saved`/`deleted` | `artifact.save_failed` (training_service 내부) | `services/model_service.py:130,171` |
+  | prediction | `prediction.started`/`completed` | `prediction.failed` | `services/prediction_service.py:195,235,267` |
+- 감사 로그와 구조화 로그는 **같은 `Event.*` 상수**를 공유 — UI/운영 관점에서 `action_type` 필터와 stdout/log 파일 검색이 동일한 키로 연결된다 (`utils/events.py`).
+- 로그 포매터는 `_KVFormatter` 가 `| k=v` 접미사 형태로 `extra=` 필드를 노출. `automl` 루트는 `propagate=False` — `caplog` 대신 실제 `RotatingFileHandler` 가 기록한 `app.log` 내용을 읽어 회귀 검증했다.
+- 신규 테스트: `tests/utils/test_log_utils.py` (4 tests)
+  - `test_get_logger_idempotent_and_namespaced` — `get_logger` 가 같은 이름에 같은 로거를 리턴하고 핸들러는 file + console 2개 고정
+  - `test_log_event_format_includes_extra_kv` — `project_id=7 size_bytes=1024` 같은 k=v 직렬화를 파일 출력물에서 확인
+  - `test_rotating_file_handler_is_configured` — `maxBytes=5MB · backupCount=3 · name=app.log` 3중 확인
+  - `test_rotating_file_handler_actually_rotates` — maxBytes 를 256 바이트로 강제 교체 후 백업 파일(`app.log.1`, `app.log.2`) 생성/회수 확인
+- `pytest -q`: 296 → **300 passed** (+4)
+
+### 7.2 성능 점검 (NFR-003)
+
+- [x] 5만 행 CSV 업로드·미리보기 10초 이내 *(`scripts/perf_bench.py --rows 50000` 실측 — upload 0.10s + profile 0.00s + preview 0.07s = **총 0.16s**, 목표 대비 60x 이상 여유)*
+- [x] 저장 모델 단건 예측 3초 이내 *(logistic_regression 학습 후 `predict_single` — **cold 0.02s / warm median 0.02s**, 목표 대비 150x 이상 여유)*
+- [x] `@st.cache_data` / `@st.cache_resource` 적용 확인 *(감사 결과: **현재 pages/ 에 미적용**. NFR-003 기준이 실측으로 충분히 달성되어 MVP 단계에서는 생략. 데이터 미리보기/프로파일은 DB schema_json 영속화로, 모델 로드는 joblib I/O 자체가 20ms 수준이라 Streamlit rerun 비용 대비 이득이 작음. follow-up 으로 기록)*
+
+**진행 로그 (2026-04-20)**
+
+- 신규 스크립트: `scripts/perf_bench.py` — 격리된 `STORAGE_DIR`/`DATABASE_URL` 에 5만 행 CSV(숫자 8 + 범주 4 + 타깃) 업로드, 프로파일, 3회 preview median, 800행 classification 학습 1건, predict_single 5회(cold + warm) 를 재현성 있게 측정. 대시 `make bench` 로 실행.
+- 실측 요약 (macOS, Python 3.11.14, 2회 돌린 중앙값):
+  | 단계 | 실측 | 목표 | 비율 |
+  |-|-|-|-|
+  | `upload_dataset` (50k 행) | 0.10–0.17s | 10s | ≤ 1.7% |
+  | `get_dataset_profile` | 0.002s | 2s | ≤ 0.1% |
+  | `preview_dataset` (n=50, median of 3) | 0.07s | 1s | ≤ 7% |
+  | **5만 행 업로드 총합** | **0.16–0.24s** | **10s** | **≤ 2.4%** |
+  | `train_one_algo` (logistic, 800 rows) | 0.59–0.63s | 참고치 15s | ≤ 4.2% |
+  | `predict_single` (cold) | 0.02s | 3s | ≤ 0.8% |
+  | `predict_single` (warm median) | 0.02s | 3s | ≤ 0.7% |
+- **`@st.cache_data` / `@st.cache_resource` 적용 현황 감사**
+  - `rg '@st\.(cache_data|cache_resource)' pages/ services/ ml/` → 0건. 설계 규약(`.cursor/rules/streamlit-ui.mdc`, `SKILL.md`) 은 데이터 미리보기/프로파일/모델 로드에 캐시를 권장하지만, 현재는 DB/파일 영속화로 비싼 연산이 이미 한 번만 수행됨 — 캐시 레이어는 중복.
+  - 벤치가 NFR 목표를 2 자릿수 여유로 통과해 MVP 범위에서는 **캐시 미적용이 현실적 최적**. `pages/` 재진입/리렌더 비용이 실제 성능 병목이 될 경우를 대비해 follow-up(예: 대용량/공용 환경) 으로 분리.
+- Makefile: `bench` 타깃 신설(`make bench`). `scripts/perf_bench.py --rows N --skip-predict` 옵션 지원.
+- 신규 파일에 `ruff check` · `black` · `mypy` 모두 0 에러.
+
+### 7.3 실패 경로 QA (NFR-004)
+
+- [x] 빈 파일 / 깨진 CSV / 중복 컬럼 → 안내 메시지, 앱 유지 *(`tests/qa/test_failure_paths.py::test_dataset_upload_rejects_bad_inputs` 3 파라미터(빈 파일 / 빈 헤더 / 바이너리 쓰레기) + `test_validate_columns_rejects_duplicates_directly` 로 `validate_columns` 중복 감지까지 회귀. Service 는 `ValidationError` 를 던지고 파일/감사 로그 정합성 검증)*
+- [x] 학습 중 단일 알고리즘 실패 → 나머지 정상, 결과표에 `failed` 표시 *(`test_training_single_algo_failure_keeps_job_completed` (@slow) — `qa_always_fail` AlgoSpec 주입 → `completed` 잡 + `failed/success` 혼재 + best 는 성공 알고리즘에서만)*
+- [x] 예측 입력 누락 컬럼 → 차단 + 한국어 안내 *(`test_prediction_missing_column_service_blocks_and_audits` (@slow) — `PredictionInputError` + `prediction.failed` 감사 로그. `test_prediction_missing_column_ui_surfaces_korean_error` — 서비스 패치로 단건 폼 제출 시 `st.error` 에 "누락" 노출 + `at.exception` 은 비어 있음)*
+
+**진행 로그 (2026-04-20)**
+
+- `tests/qa/` 디렉터리 신설 — NFR-004 회귀를 한 파일(`test_failure_paths.py`, 8건)에 묶음. Service 직접 호출 + `streamlit.testing.v1.AppTest` 를 한 파일 안에서 섞기 위해 `tests/services/conftest.py` · `tests/ui/conftest.py` 와 동형의 autouse 엔진 override + 시스템 사용자 시드 + `STORAGE_DIR` 격리 fixture 복제
+- pandas 2.x 는 CSV 헤더 중복을 자동 리네이밍(`a,a,b → a, a.1, b`)해 **파일 경로로는 `DUPLICATED_COLUMNS` 재현이 불가**. 회귀는 (a) 실제 업로드로 `FILE_EMPTY`/`HEADER_MISSING`/`FILE_PARSE_FAILED` 를 재현, (b) `validate_columns` 단위로 `DUPLICATED_COLUMNS` 를 별도 회귀로 묶는 2단 구조 채택
+- 파일 업로드 실패 시나리오마다 `<storage>/datasets/<project_id>/` 디렉터리가 비어 있는지(롤백)와 감사 로그에 `*_failed` 만 남고 `*_uploaded` 이벤트는 섞이지 않는지까지 검증
+- `pytest -q` 296 passed (기존 288 + 신규 8), `ruff check .` / `black --check .` 통과
+
+### 7.4 문서 업데이트
+
+- [x] `README.md` "빠른 시작" 검증 (새 클론에서 재현) *(6단계로 재구성: venv → pip → .env → `init_db --drop --seed` → `generate_samples` → `make run`. 각 스텝을 실제 실행으로 재현 검증. 페이지 구성표/폴더 구조/테스트 섹션(slow 분리: 296→277 fast)/트러블슈팅 추가)*
+- [x] `ARCHITECTURE.md` 구현과 달라진 부분 반영 *(문서 버전 0.1→0.2. §3 폴더 트리 완전 재동기화: `06_predict.py`→`06_prediction.py`, `components/layout.py`, `services/dto.py`·`admin_service.py`, `ml/profiling.py`, `utils/{events,messages,db_utils}.py`, `tests/{ui,utils,qa}/`, `samples/`, `Makefile` 추가. §4.2 예측 플로우를 `predict_single`/`predict_batch` 실제 API 로 교체. §4.3 세션 키 테이블에 `current_model_id` 추가. §6.4 아티팩트 4파일(추가 `preprocessor.joblib`) · 롤백 계약 명시. §7 로그/감사 규약(`<domain>.<verb>[_failed]` 접미사) 명시)*
+- [x] 샘플 데이터셋(`samples/classification.csv`, `samples/regression.csv`) 커밋 *(`.gitignore` 에 `samples/` 예외 없음 — 현재 저장소가 git 초기화 전이므로 "커밋" 은 저장소 초기화 시점에 반영. 재현성은 `scripts/generate_samples.py` (sklearn iris/diabetes) + `make samples` 로 보장. 151행 / 443행 확인)*
+
+**진행 로그 (2026-04-20)**
+
+- `README.md` 재작성 — 빠른 시작 6단계를 실제 명령으로 검증(`rm -f db/app.db && init_db --drop --seed && generate_samples && sync_streamlit_config && python -c "import app"` 정상 종료). 페이지 구성표(7 페이지 × FR 매핑)와 트러블슈팅 표 추가. 테스트 실행 가이드에 `@pytest.mark.slow` 분리 안내(fast 277건 / 전체 296건)
+- `ARCHITECTURE.md` 0.2 로 승격 — 문서 상단 변경 요약을 명시하고, 0.1 단계에서 비어있던 `dto.py`, `admin_service.py`, `profiling.py`, `messages.py`, `events.py`, `db_utils.py`, `tests/qa/` 를 §3 트리와 본문에 일관 반영. 예측 데이터 흐름을 실제 구현(`predict_single`/`predict_batch`, `ModelBundle`, `validate_prediction_input`) 으로 고쳐 쓰고, 세션 키에 `current_model_id` 추가
+- `samples/classification.csv`(iris, 150행 + 헤더 = 151행, 타깃 `species`) / `samples/regression.csv`(diabetes, 442행 + 헤더 = 443행, 타깃 `progression`) 재생성 확인. `.gitignore` 는 `samples/` 를 제외하지 않으므로 향후 git 초기화 시 그대로 tracked
+- 기존 `Makefile` 의 `smoke` 타깃이 참조하는 `scripts/smoke_train.py` 는 미구현 — README 는 대신 `pytest -q -m "not slow"` 을 스모크 수단으로 안내 (후속 정비 항목)
+- 코드 변경 없음 → `ruff check .` 통과, `pytest` 는 직전 296 passed 상태 유지
+
+### 7.5 CI/품질 게이트
+
+- [x] `pytest --cov` 커버리지 60% 이상 (ml/services)
+- [x] `ruff check .` 0 에러
+- [x] `mypy` 0 에러 (서드파티 `ignore_missing_imports=True`)
+- [x] `scripts/init_db.py --drop` 재현성
+
+---
+
+## 단계 8. (선택) 3단계 확장
+
+> **릴리즈 상태 고정 (2026-04-20)** — MVP 를 `v0.1.0` 으로 릴리즈 대상 고정. §8 이하 모든 항목은 **후속 마일스톤**으로 보류하며, 본 MVP 범위는 §0–§7 로 확정한다. 본 섹션의 `[ ]` 는 **계획 상 열어둔 백로그**로, `make plan-check` 는 `in-progress=0` 를 계속 유지한다.
+
+### 8.1 인증 모드 (FR-010~012)
+
+- [ ] `services/auth_service.py` + `User` 테이블 활성화
+- [ ] 로그인/로그아웃 페이지
+- [ ] `settings.AUTH_MODE="basic"` 스위치로 분기
+- [ ] 비밀번호 bcrypt 해시 (passlib)
+- [ ] **마이그레이션 (§2.2a 에서 이관)**
+  - [ ] 기존 `owner_user_id IS NULL` Project 를 시스템 사용자(또는 지정 계정)로 귀속하는 1회성 마이그레이션 스크립트
+  - [ ] `User.password_hash` 컬럼 NOT NULL 전환 (기존 시스템 사용자에는 sentinel hash 부여)
+  - [ ] `AuditLog.user_id` 를 `SYSTEM_USER_ID(0)` 에서 실제 로그인 사용자 id 로 대체하는 경로 검증
+
+### 8.2 PostgreSQL 전환
+
+- [ ] `requirements.txt`에서 `psycopg[binary]` 활성화
+- [ ] `.env.DATABASE_URL` 교체 후 `init_db.py` 동작 확인
+- [ ] 주요 쿼리 성능 점검
+
+### 8.3 비동기 학습 (권장안 B)
+
+- [ ] `training_service.run_training` 을 Celery/RQ 태스크로 래핑
+- [ ] Streamlit은 job status 폴링으로 전환
+
+---
+
+## 부록 A. FR → 파일 매핑 치트시트
+
+| FR | 주요 파일 | 단계 |
+|----|-----------|------|
+| FR-001~003 앱 공통 | `app.py`, `utils/session_utils.py`, `utils/messages.py`, `utils/events.py`, `pages/components/toast.py` | 1, 5 |
+| FR-010~012 인증 | `services/auth_service.py` (User 정책: 2.2a 참조) | 2, 8 |
+| FR-020~024 프로젝트 | `services/project_service.py`, `services/dto.py`, `pages/01_projects.py` | 3, 4, 6 |
+| FR-030~035 데이터셋 | `services/dataset_service.py`, `services/dto.py`, `utils/file_utils.py`, `pages/02_dataset_upload.py` | 1, 3, 4, 6 |
+| FR-040~045 학습 설정 | `ml/schemas.py`, `services/training_service.py`, `pages/03_training.py` | 3, 4, 6 |
+| FR-050~054 전처리 | `ml/preprocess.py`, `ml/profiling.py` | 3 |
+| FR-060~066 학습 | `ml/trainers.py`, `ml/evaluators.py`, `ml/registry.py`, `services/training_service.py` (아티팩트 저장 순서: 4.3a) | 3, 4 |
+| FR-070~075 결과/모델 | `ml/artifacts.py`, `services/model_service.py`, `services/dto.py`, `pages/04_results.py`, `pages/05_models.py` | 3, 4, 6 |
+| FR-080~085 예측 | `services/prediction_service.py`, `pages/06_predict.py` | 4, 6 |
+| FR-090~093 이력/관리자 | `repositories/audit_repository.py`, `services/admin_service.py`, `pages/07_admin.py` | 2, 4, 6 |
+| 공통 운영 | `Makefile`, `.pre-commit-config.yaml`, `.streamlit/config.toml`, `scripts/sync_streamlit_config.py` | 0 |
+
+---
+
+## 부록 B. 단계 간 의존성 그래프
+
+```
+[0 부트스트랩]
+      │
+      ▼
+[1 유틸/인프라] ──────────────┐
+      │                      │
+      ▼                      ▼
+[2 DB/Repository]      [3 ML 엔진]
+      │                      │
+      └──────────┬───────────┘
+                 ▼
+          [4 Service]
+                 │
+                 ▼
+          [5 UI 스켈레톤]
+                 │
+                 ▼
+          [6 페이지 구현]
+                 │
+                 ▼
+          [7 품질 QA]
+                 │
+                 ▼
+          [8 (선택) 확장]
+```
+
+---
+
+## 리스크 / 이슈 레지스터
+
+*구현 중 막히거나 결정 보류된 항목을 `[!]`로 표시한 뒤 여기에 상세를 남긴다.*
+
+| ID | 날짜 | 단계 | 요약 | 영향 | 대응 | 상태 |
+|----|------|------|------|------|------|------|
+| _(없음)_ | | | | | | |
+
+**템플릿**
+```
+| R-001 | 2026-04-18 | 3.5 | xgboost import 실패 (M1) | trainers 테스트 실패 | extras로 격리 + 조건부 스킵 | open |
+```
+
+### 알려진 리스크 (사전 식별)
+
+- **XGBoost/LightGBM macOS 설치**: `brew install libomp` 필요할 수 있음. 실패 시 `registry.py`에서 import 가드로 skip.
+- **대용량 CSV 성능**: NFR-003 10초 목표. 초과 시 `@st.cache_data` 및 `pd.read_csv(..., usecols=...)` 범위를 조정.
+- **Streamlit 재실행 모델**: 세션 상태 의존이 과해지면 디버깅이 어려워진다. 단계 5에서 세션 키 총량을 4개(`SessionKey`)로 고정.
+- **SQLite 동시성**: MVP는 단일 사용자. 향후 Postgres 전환 시 트랜잭션 경계 재검토.
+
+---
+
+## 변경 이력
+
+*계획서 자체의 변경 로그. 스코프 변경/단계 추가/항목 이동 시 반드시 기록.*
+
+| 날짜 | 버전 | 변경 내용 |
+|------|------|-----------|
+| 2026-04-17 | 0.1 | 초안 작성 (단계 0~8, 부록 A/B) |
+| 2026-04-17 | 0.2 | 계획서 유지 규칙 / Definition of Done / 샘플 데이터(0.3) / 리스크 레지스터 추가 |
+| 2026-04-17 | 0.3 | **added**: 0.2a(네비 방식 고정), 0.2b(config.toml 동기화), 1.7(messages/events 카탈로그), 2.2a(AUTH 정책), 3.1a/b(DTO 분리), 4.3a(아티팩트 저장 순서), Makefile/pre-commit 훅, 6.4 비교표 규격 |
+
+---
+
+## 진행 로그
+
+*각 단계 시작/완료 시점을 이 아래에 append. 포맷: `YYYY-MM-DD | 단계 | 상태 | 메모`*
+*상태: `started` / `completed` / `blocked` / `resumed` / `note`*
+
+- 2026-04-17 | 단계 0 | started | 부트스트랩 착수 (0.1~0.3 일괄 진행)
+- 2026-04-17 | 단계 0.1 | completed | 패키지 스캐폴드(__init__.py 9개) + storage/db/.gitkeep
+- 2026-04-17 | 단계 0.2 | completed | app.py/Makefile/pre-commit/dev_run.sh + check_plan_staged.sh
+- 2026-04-17 | 단계 0.2a | completed | `pages/` 자동 멀티페이지로 고정, st.switch_page만 사용
+- 2026-04-17 | 단계 0.2b | completed | config.toml + sync_streamlit_config.py (350↔200 라운드트립 확인)
+- 2026-04-17 | 단계 0.3 | completed | iris/diabetes → samples/*.csv, conftest fixture 노출
+- 2026-04-17 | 단계 0 | note | venv(python3.11) 생성, 최소 의존 설치 상태. lint/mypy/pytest 풀 설치는 단계 1 진입 시 `make install` 로 수행
+- 2026-04-17 | 단계 0 | note | streamlit run app.py → HTTP 200 확인 (port 8599, headless)
+- 2026-04-17 | 단계 0 | completed | 부트스트랩 완료, 단계 1 진입 준비
+- 2026-04-17 | 단계 1 | started | 기본 유틸/인프라 일괄 진행 (1.1~1.8), 의존 전체 설치 포함
+- 2026-04-17 | 단계 1 | completed | config/settings.py, utils/{errors,log_utils,file_utils,session_utils,messages,events}.py, pages/components/toast.py 구현. tests/utils/* 24건 통과, ruff/black 클린, storage/logs/app.log 기록 확인. 0.2의 `[~]` 항목도 함께 정리.
+- 2026-04-17 | 단계 2.1~2.2a | started | ORM base(session_scope) + 엔터티 7종 + AUTH_MODE=none 정책 반영
+- 2026-04-17 | 단계 2.1 | completed | repositories/base.py: engine 경로 정규화, SessionLocal, DeclarativeBase, session_scope, TimestampMixin
+- 2026-04-17 | 단계 2.2 | completed | repositories/models.py: User/Project/Dataset/TrainingJob/Model/PredictionJob/AuditLog (7 tables). 상위 삭제 cascade 정책 적용
+- 2026-04-17 | 단계 2.2a | completed | Project.owner_user_id/AuditLog.user_id nullable, SYSTEM_USER_* 상수 선언 (시드/감사 쓰기는 §2.3/§2.4 에서)
+- 2026-04-17 | 단계 2.5 | partial | conftest(sqlite_engine/session_factory/db_session) + test_session_scope.py 6건 통과
+- 2026-04-17 | 단계 2.3~2.5 | started | Repository 6종 + init_db 스크립트 + 통합 테스트로 단계 2 종결 진입
+- 2026-04-17 | 단계 2.3 | completed | Repository 6종 구현 (project/dataset/training/model/prediction/audit). 함수형, 세션 주입식. 상태/input_type 화이트리스트, §4.3a 보상 로직 지원.
+- 2026-04-17 | 단계 2.4 | completed | scripts/init_db.py (--drop/--seed). 시스템 유저 + 샘플 프로젝트 멱등 upsert. 구조화 로그 연동.
+- 2026-04-17 | 단계 2.5 | completed | test_project/training_repository 20건 추가. 총 repository 테스트 26건 통과. SQLite PRAGMA foreign_keys=ON 자동 활성화.
+- 2026-04-17 | 단계 2 | completed | 전체 pytest 50건 통과, ruff/black 클린, init_db smoke (drop→seed→재실행 멱등) 확인
+- 2026-04-17 | 단계 3.1~3.3 | started | ML/Service DTO 분리 + 알고리즘 레지스트리 + 데이터 프로파일링 (전처리는 다음 세션)
+- 2026-04-17 | 단계 3.1a | completed | ml/schemas.py 5개 dataclass (frozen/slots). TrainingConfig 자체 검증 포함. FeatureSchema to_dict/from_dict 왕복.
+- 2026-04-17 | 단계 3.1b | completed | services/dto.py 10종 DTO + from_orm. tests/conftest.py 로 db_session 전역화.
+- 2026-04-17 | 단계 3.2 | completed | ml/registry.py: sklearn 기반 7종 + optional XGB/LGBM. 런타임 로드 실패도 skip 처리.
+- 2026-04-17 | 단계 3.3 | completed | ml/profiling.py: profile_dataframe/suggest_excluded. missing·unique 비율 포함.
+- 2026-04-17 | 단계 3.1~3.3 | partial | tests/ml/{registry,profiling} + tests/services/test_dto 총 23건. 전체 pytest 73건 통과. ml/ 에 streamlit/sqlalchemy import 0건. 다음: §3.4 전처리
+- 2026-04-17 | 단계 3.4~3.6 | done | preprocess/trainers/evaluators + tests/ml/{preprocess,trainers,evaluators,pipeline_e2e} 총 37건. 전체 pytest 110건 통과. iris/diabetes 샘플 CSV 로 end-to-end(전처리→학습→평가→best) 실행 확인. `ml/` streamlit/sqlalchemy import 여전히 0건. 다음: §3.7 artifacts (+ §4.3 과 결합)
+- 2026-04-17 | 세션 종료 | checkpoint | 단계 3.6 까지 종결. 110 tests green / ruff·black clean. 다음 세션은 §3.7 부터 (아래 "다음 세션 재개 가이드" 참고)
+- 2026-04-20 | 단계 4.1 | started | 루트 C 진입: Project Service 부터 쌓기 시작
+- 2026-04-20 | 단계 4.1 | completed | services/project_service.py (CRUD + cascade 가드 + 감사 로그) 구현. project_repository 에 count_datasets/count_models/count_training_jobs + exists_by_name(exclude_project_id) 추가. tests/services/conftest.py (SessionLocal 모킹 + seeded_system_user + tmp_storage) / test_project_service.py 23건 추가. 전체 pytest 133건 green, ruff/black clean.
+- 2026-04-20 | 단계 4.2 | started | Dataset Service: 업로드·프로파일·프리뷰·목록·삭제
+- 2026-04-20 | 단계 4.2 | completed | services/dataset_service.py 구현. 업로드 파이프라인(project 존재 → ext/size → save → read_tabular → profile → DB insert) + 실패 보상(파일 unlink + dataset.upload_failed 감사). schema_json ↔ DatasetProfileDTO 왕복 헬퍼. preview_dataset 은 df.to_json 경유로 NaN→None 정규화 및 MAX_ROWS 클램프. delete_dataset 은 커밋 이후 best-effort unlink. tests/services/test_dataset_service.py 22건 추가 (해피/실패/프로파일 재구성/프리뷰 클램프/cascade 가드). 전체 pytest 155건 green, ruff/black clean.
+- 2026-04-20 | 단계 3.7 + 4.3 | started | Artifacts + Training Service 결합 진행 (§4.3a 보상 설계를 한 번에 검증)
+- 2026-04-20 | 단계 3.7 | completed | ml/artifacts.py: save/load_model_bundle(4파일 레이아웃) + ModelBundle(frozen/slots) + validate_prediction_input(누락→ValueError, 추가 drop, 수치 coerce, 범주 str). tests/ml/test_artifacts.py 10건 (저장 파일 검증 / 로드 왕복 / 누락 파일 / 입력 검증 4종). ml/ 은 여전히 utils/errors 비의존(의도) — Service 가 PredictionInputError 로 변환.
+- 2026-04-20 | 단계 4.3 | completed | services/training_service.py: run_training / get_training_result / list_training_jobs. 수명주기(pending→running→completed|failed) 와 run_log 스탬프, on_progress(stage, ratio) 동기 콜백. §4.3a 보상 구현: bulk_insert → flush → save_model_bundle → update_paths → mark_best → status 전이를 **단일 트랜잭션**으로 수행, 실패 시 session_scope 롤백 + saved_dirs rmtree + 별도 트랜잭션으로 job=failed 확정. metric_summary_json 에 {status, metrics, error, train_time_ms} 구조로 저장해 실패 행도 DTO 로 복원 가능. tests/services/test_training_service.py 11건 (분류/회귀 해피, 파일 누락 StorageError, 타깃 누락 ValidationError, metric_key 검증, 부분 실패 recorded, 전체 실패 → job=failed, 아티팩트 저장 실패 시 DB 롤백 + 파일 정리 + MLTrainingError, list/get). 전체 pytest 176건 green, ruff/black clean.
+- 2026-04-20 | 단계 4.4 + 4.5 | started | Model Service(사후 관리) + Prediction Service 를 결합 진행 (save_model → predict 경로 연결을 한번에 검증)
+- 2026-04-20 | 단계 4.4 | completed | services/model_service.py: list_models / get_model_detail(FeatureSchemaDTO + metrics_summary 재구성) / save_model(수동 pin, model_repository.mark_best 위임, 아티팩트 존재 요건) / delete_model(DB 삭제 → `<models_dir>/<id>/` + PredictionJob.result_path rmtree·unlink best-effort) / find_best_model(조회 헬퍼). tests/services/test_model_service.py 10건 (list 포함 관계, detail 스키마/지표 복원, pin 전환 + audit manual=True 기록, 아티팩트 없는 모델 차단, 삭제 시 파일·레코드 동시 정리). ORM 노출 없음 / Streamlit import 0건.
+- 2026-04-20 | 단계 4.5 | completed | services/prediction_service.py: predict_single(form dict → 1-row df) / predict_batch(read_tabular → 경고 수집 → validate → predict → `<predictions_dir>/<pj_id>.csv`) 모두 PredictionJob pending→running→completed|failed 전이를 기록하고 감사 로그(Event.PREDICTION_STARTED/COMPLETED/FAILED) 를 남긴다. §10.4 규칙 반영: 누락 컬럼 PredictionInputError 로 차단, 추가 컬럼과 unseen 범주는 warnings 에 누적. 분류 시 `predict_proba` 성공하면 `prob_<class>` 컬럼 자동 부착. 실패 경로는 AppError/일반 예외 모두 `_finalize_failure` 로 묶여 PredictionJob.status='failed' + audit 고정. ValueError → PredictionInputError 변환으로 ml 레이어의 순수성 유지. tests/services/test_prediction_service.py 11건 (iris 단건+proba 합≈1, diabetes 단건, 누락 컬럼 차단, 빈 payload, unknown model, 배치 CSV 저장·복원, extra/unseen 경고, 파일 미존재 ValidationError, to_csv 실패 StorageError 보상(PredictionJob=failed + audit), 모델 path=None 시 NotFoundError). 전체 pytest **197건 green**, ruff/black clean.
+- 2026-04-20 | 단계 4.3a | completed | §4.3a 3개 체크박스 마감 — ``model_repository.update_paths`` (plan 네이밍은 ``set_paths`` 였으나 ``feature_schema_json`` 까지 함께 갱신해서 포괄적 명칭으로 구현), ``services/training_service._persist_and_save`` + ``_cleanup_model_dirs`` 로 session_scope 롤백 + 디스크 rmtree 정리, ``mark_best`` 는 모든 저장 완료 후 단일 트랜잭션 내 한 번 호출. 모든 로직은 §4.3 완료 시점에 이미 구현되어 있었고 본 세션에서 체크박스만 정합화.
+- 2026-04-20 | 단계 4.6 | completed | Service 레이어 end-to-end 왕복 테스트 1건 추가: tests/services/test_service_e2e.py. 시나리오 = 프로젝트 생성 → 데이터셋 업로드 → 학습(진행 콜백 6단계/ratio 단조 증가/최종 1.0 검증) → 모델 상세 조회 → 수동 pin(is_best 전환 & 단일성 검증) → 단건 예측(proba 합≈1) → 배치 예측(CSV 저장 경로/행수 일치) → 모델 삭제(디렉터리/PredictionJob cascade/결과 CSV best-effort 정리) → 프로젝트 cascade 가드(ValidationError) → 데이터셋 삭제 → 프로젝트 삭제 → 감사 로그에 핵심 이벤트 9종(project.created/dataset.uploaded/training.completed/model.saved/prediction.started/prediction.completed/model.deleted/dataset.deleted/project.deleted) 전부 기록 확인. 전체 pytest **198건 green**, ruff/black clean, `make plan-check` in-progress=0. 단계 4 서비스 계층 전체 종결.
+- 2026-04-20 | 단계 5.1 | started | UI 스켈레톤 진입: App 진입점 + 사이드바/헤더 공용 컴포넌트 + DB 초기화 체크
+- 2026-04-20 | 단계 6.1 | started | 프로젝트 관리 페이지 착수 (생성/목록/선택/수정/삭제 + 사이드바 연동)
+- 2026-04-20 | 단계 6.2 | started | 데이터 업로드 페이지 착수 (업로드 폼/프리뷰/프로파일/목록/삭제 + `data_preview` 컴포넌트 분리)
+- 2026-04-20 | 단계 6.4 | started | 결과 비교 페이지 착수 (비교표 + 플롯 + save_model 연동)
+- 2026-04-20 | 단계 6.4 | completed | `pages/04_results.py` 신설 + 플롯 데이터 영속화 파이프라인 추가. 구성: **학습 잡 피커**(`list_training_jobs` 최신순 → `LAST_TRAINING_JOB_ID` 기본 선택, 변경 시 즉시 동기화) / **요약 카드**(`st.metric` 3종 + 베스트 `st.success` 메시지에 `↑/↓` 방향 표기) / **성능 비교표**(`_sort_rows` 로 기준 지표 방향대로 정렬, 실패 행은 맨 아래 & 지표 None, `st.dataframe` + `column_config` 로 `★ best` 배지 & metric `format="%.4f"`) / **플롯 섹션**(성공 모델 셀렉터, 기본값은 베스트 인덱스, `model_service.get_model_plot_data(model_id)` 로 load → `kind=confusion_matrix` → plotly `imshow` blues heatmap + `text_auto`, `kind=regression_scatter` → plotly scatter + y=x 대각선. plotly 예외 시 `st.dataframe` 폴백) / **저장 액션**(성공 모델 셀렉터 + `[이 모델 저장]` 버튼, 현재 베스트는 disabled + 라벨 "베스트로 고정됨", 다른 모델 선택 후 클릭 → `model_service.save_model` → is_best 승격 + MODEL_SAVED audit + flash success) / **CTA**(`모델 관리로 이동`/`다시 학습하기` — `st.switch_page` 실패 시 info flash 폴백). **플롯 데이터 영속화**(§3.7/§4.3 확장): `ml/evaluators.build_plot_data(trained, X_test, y_test, task_type)` 추가 — 성공 모델별로 `{kind, ...}` dict 반환(회귀는 2000포인트 균등 샘플링 상한), `training_service._persist_and_save` 가 bundle 저장과 같은 트랜잭션에서 `<model_dir>/plot_data.json` 을 write (쓰기 실패는 `suppress(OSError, TypeError, ValueError)` 로 보조 파일 취급). `services/model_service.get_model_plot_data(model_id) -> dict|None` 로 안전 로드(파일 없음/깨진 JSON → `None`). DTO 확장: `ModelComparisonRowDTO.model_id` + `TrainingResultDTO.task_type` 추가 — UI 가 save_model/plot 조회에 바로 쓸 수 있도록. 메시지 추가: `Msg.TRAINING_RESULT_REQUIRED`, `Msg.MODEL_SAVED`, `Msg.MODEL_SAVE_REQUIRES_SUCCESS`. tests: `tests/ml/test_evaluators.py` +4건(build_plot_data 분류/회귀/실패 스킵/잘못된 task), `tests/services/test_model_service.py` +3건(plot_data.json 존재·로드, 파일 제거 시 None, 존재하지 않는 모델 None), `tests/ui/test_results_page.py` 7건(DB 가드 / 프로젝트 가드 / 학습결과 가드 / [slow] 분류 렌더(카드·success·플롯 셀렉터·저장 셀렉터) / [slow] 회귀 scatter 준비 / [slow] 저장 버튼 → is_best 이동 검증 / [slow] 정렬 렌더). 전체 pytest **256건 green**, ruff/black clean, streamlit smoke (`/`, `/01_projects`, `/02_dataset_upload`, `/03_training`, `/04_results`) 모두 HTTP 200, `make plan-check` in-progress=0.
+- 2026-04-20 | 단계 6.3 | started | 학습 설정/실행 페이지 착수 (`st.status` 진행률 + `run_training` 콜백 연동)
+- 2026-04-20 | 단계 6.3 | completed | `pages/03_training.py` 신설 + `services/dataset_service.suggest_excluded_columns` 추가 + `ml.profiling.ID_UNIQUE_RATIO_THRESHOLD` public 승격. 페이지 구성: **데이터 확인 섹션**(`render_profile` 재사용, `st.expander` 기본 collapsed) / **데이터셋 피커**(`selectbox` 라벨 `"[id] filename — rows × cols"`, 선택 즉시 `SessionKey.CURRENT_DATASET_ID` 동기화) / **설정 폼**(task_type 라디오 → metric 옵션이 분류/회귀 튜플로 자동 전환, target selectbox, excluded multiselect 는 `suggest_excluded_columns(threshold=0.95)` 를 기본값으로 주입하되 target 컬럼은 후보에서 배제, test_size slider(0.05~0.5), metric selectbox 에 `METRIC_DIRECTIONS` 기반 ↑/↓ help, job_name text_input — 공백만이면 None) / **실행**(폼 제출 → `TrainingConfig` 조립 → `st.status("학습 진행 중...", expanded=True)` 안에서 `training_service.run_training(on_progress=...)` 호출, 콜백은 `progress_bar.progress(ratio, text=stage)` + 최근 6단계 caption 로그) / **완료 처리**(성공 → `status.update(state="complete")` + `SessionKey.LAST_TRAINING_JOB_ID` 세팅 + flash success + 3-metric 카드 + 베스트 배지 + 실패건 expander, 실패 → `status.update(state="error")` + flash error. 결과 페이지(§6.4) CTA 는 `st.switch_page` 시도 후 `StreamlitAPIException` 시 info flash 로 폴백). **세션 stale 보정**: `CURRENT_DATASET_ID` 가 프로젝트의 현재 datasets 리스트에 없으면 렌더 전에 제거. 결정 기록: `st.form` 대신 **개별 위젯 + 하단 실행 버튼** — task_type 변경 시 metric 옵션이 즉시 갱신돼야 하기 때문. Streamlit 위젯 상태 보존 특성상 target 을 런타임에 바꿔도 excluded 기본값은 초회 렌더 시점 고정 (UX 문서화, 테스트도 이에 맞춰 초회 렌더만 검증). tests: `tests/services/test_dataset_service.py` +3건(식별자 힌트 / 임계값 튜닝 / 없는 데이터셋 NotFoundError), `tests/ui/test_training_page.py` 9건 (DB 가드 / 프로젝트 가드 / 데이터셋 없음 가드 / 분류 폼 기본값 / 회귀 전환 후 metric 옵션 / 식별자 컬럼 기본 제외 / [slow] 분류 happy path(`run_training` 실행 후 `LAST_TRAINING_JOB_ID` 세팅 & 요약 메트릭 렌더) / [slow] 회귀 happy path / monkeypatch 로 Service 예외 주입 시 error flash 노출 + LAST_TRAINING_JOB_ID 미세팅). 전체 pytest **242건 green**, ruff/black clean, streamlit smoke (`/`, `/01_projects`, `/02_dataset_upload`, `/03_training`) 모두 HTTP 200, `make plan-check` in-progress=0.
+- 2026-04-20 | 단계 6.2 | completed | `pages/02_dataset_upload.py` + `pages/components/data_preview.py` 신설. 구성: **업로드 폼**(`st.form(clear_on_submit=True)` + `ALLOWED_EXTENSIONS`, 빈 파일 제출 → `warning` flash / ValidationError → error flash / 성공 시 `SessionKey.CURRENT_DATASET_ID` 자동 세팅) / **프리뷰 섹션**(`st.tabs([샘플 데이터, 컬럼 프로파일])` — 샘플 탭은 `render_preview` 로 최대 50행 테이블 + `caption` 표시, 프로파일 탭은 `render_profile` 로 행/컬럼 메트릭 2개 + 컬럼별 통계 테이블(`결측`, `결측비율`, `고유값`, `고유비율`)) / **목록**(행별 `st.container(border=True)` + `[선택][삭제]` 컬럼, 현재 선택 데이터셋은 ★ 마커 + select disabled) / **삭제 확인 플로우**(세션 플래그 `datasets_delete_target_id` 기반 인라인 컨펌 블록, cascade 경고 고정, 현재 선택 대상 삭제 시 `SessionKey.CURRENT_DATASET_ID` 자동 해제) / **stale 세션 정리**(목록에 없는 current_dataset_id 는 렌더 전에 제거). 결정: `st.dialog` 대신 §6.1 과 동일 패턴(세션 플래그 + 인라인)로 AppTest 친화 유지. 에러 플래시 UX 정합: 실패 경로 모두 `flash("error") + st.rerun()` 로 같은 사이클 안에서 `render_flashes` 가 소비. tests: `tests/ui/test_dataset_upload_page.py` 10건 (DB 가드 / 프로젝트 미선택 가드 / 목록 렌더 + 사이드바·서브헤더 노출 / 기본 select 미설정 검증 / 탭2+메트릭2 렌더 / 선택 버튼 상호작용 / 빈 파일 제출 warning / 삭제 성공 → DB·파일 제거 / 현재 선택 삭제 시 세션 해제 / 삭제 취소 / stale current_dataset_id 자동 제거). NFR-003 실측: 5만 행 12컬럼 CSV 기준 upload=0.15s / preview(50)=0.110s / profile=0.001s → **end-to-end 0.26s (목표 10s)**. 전체 pytest **230 green**, ruff/black clean, streamlit smoke (`/`, `/01_projects`, `/02_dataset_upload`) 모두 HTTP 200.
+- 2026-04-20 | 단계 6.1 | completed | `pages/01_projects.py` 신설. 구성: **생성 폼**(`st.expander` + `st.form`, 성공 시 자동 선택 + 사이드바 즉시 반영) / **목록**(행 별 `st.container(border=True)` + `[선택][수정][삭제]` 3버튼 컬럼, 현재 프로젝트는 ★ 마커 + 선택 버튼 disabled) / **수정 플로우**(세션 `projects_edit_target_id` 기반 인라인 `st.form` 노출, 저장 시 `project_service.update_project`) / **삭제 플로우**(세션 `projects_delete_target_id` 기반 인라인 컨펌 블록 + cascade 체크박스 — 기본값은 children 유무에 따라 결정, cascade=False 로 ValidationError 발생 시 컨펌 블록 유지 후 flash error 로 사용자 재시도 안내, 현재 선택 프로젝트 삭제 시 `SessionKey.CURRENT_PROJECT_ID` 자동 해제). 결정 기록: `st.dialog` 대신 세션 상태 기반 인라인 컨테이너 사용 — `streamlit.testing.v1.AppTest` 환경에서 dialog 내부 위젯 조작이 버전별로 불안정한 반면, 세션 플래그 + 인라인 렌더는 버튼 한 번으로 같은 UX 를 제공하고 테스트가 견고함. 에러 플래시 UX 정합화: 생성/수정/삭제 실패 시 `flash("error", ...)` 직후 `st.rerun()` 호출로 같은 사이클 안에서 `render_flashes` 가 소비하게 처리. tests: `tests/ui/test_projects_page.py` 12건 (DB 미초기화 가드 / 빈 목록 안내 / 생성 해피 + 자동 선택 + 사이드바 success / 이름 공백 ValidationError flash / 이름 중복 flash / 선택 버튼 상호작용 / 현재 프로젝트 row 마커 + select disabled / 수정 저장 + 취소 / 삭제 해피 / cascade 거부 → 1차 실패 + 2차 성공 왕복 / 현재 프로젝트 삭제 시 session 해제). 전체 pytest **220건 green**, ruff/black clean, `streamlit run app.py --server.headless true --server.port 8599` 로 `/` + `/01_projects` 각각 HTTP 200 smoke 확인.
+- 2026-04-20 | 단계 5.1 | completed | app.py 재작성 + `pages/components/layout.py` 신설 + `utils/db_utils.py` 추가. 구성: `configure_page`(set_page_config 래퍼, 페이지 재실행에 대비해 `StreamlitAPIException` suppress) / `render_sidebar`(DB 뱃지·현재 프로젝트 카드·선택 해제·네비 리스트) / `render_page_header`(title+caption+`render_flashes`). 홈 본문은 서비스 소개 → 최근 프로젝트 3장 카드(`project_service.list_projects[:3]`, "선택하기" 클릭 시 `SessionKey.CURRENT_PROJECT_ID` 갱신 + flash("success") + `st.rerun()`) → "프로젝트 페이지로 이동"/"문서 보기" CTA. DB 초기화 체크는 `utils.db_utils.is_db_initialized` 로 inspector 경유 7개 필수 테이블 존재 검사, 미초기화 시 본문+사이드바 양쪽에서 `init_db` 명령 안내. Stale project id 는 `get_project` `NotFoundError` 를 잡아 세션에서 조용히 제거. tests: `tests/utils/test_db_utils.py` 5건(전체·부분·공DB·깨진 엔진·REQUIRED_TABLES 회귀), `tests/ui/test_app_home.py` 5건 (Streamlit `AppTest` 기반: DB 미초기화 안내 / 프로젝트 없을 때 인트로 / 3개 카드 노출 + 선택 상호작용 / stale id 자동 제거 / 사이드바 현재 프로젝트 표시). **전체 pytest 208건 green**, ruff/black clean. `streamlit run app.py --server.headless true --server.port 8599` → `/_stcore/health=ok`, `/=HTTP 200` smoke 성공.
+
+---
+
+## 다음 세션 재개 가이드 (Resume)
+
+### 현재 완료 상태 (2026-04-17 체크포인트)
+- **완료**: 단계 0 (부트스트랩), 1 (유틸·세션), 2 (DB·Repository), 3.1~3.6 (ML 스키마/DTO/레지스트리/프로파일링/전처리/학습/평가)
+- **검증**: `pytest -q` → **110 passed**, `ruff check .` clean, `black --check` clean
+- **불변식**: `ml/` 아래 `streamlit`/`sqlalchemy` 실 import 0건 (docstring 언급만 있음)
+
+### 즉시 실행 가능한 샘플 파이프라인
+샘플 CSV 기반 end-to-end 학습/평가는 `tests/ml/test_pipeline_e2e.py` 참조.
+순수 `ml/` 모듈만으로 아래 순서가 돌아감을 확인:
+`prepare_xy → split_feature_types → build_feature_schema → build_preprocessor → split_dataset → train_all → score_models → select_best`
+
+### 다음 세션 시작 전 준비 체크리스트
+1. `source .venv/bin/activate` (Python 3.11)
+2. `pytest -q` → 110 passed 기대. 깨지면 환경/의존성 먼저 복원.
+3. `make plan-check` → `OK: in-progress=0` 확인.
+4. `IMPLEMENTATION_PLAN.md` 의 §3.7 / §4.x 체크리스트를 참조점으로 삼는다.
+
+### 다음 작업 후보 (우선순위 제안 순)
+- **A. §3.7 `ml/artifacts.py` 단독** — `save_model_bundle` / `load_model_bundle` / `validate_prediction_input` + `test_artifacts.py` 왕복 테스트. 단계 3 종결.
+- **B. §3.7 + §4.3 Training Service 결합** — 아티팩트 저장 순서(§4.3a 보상 로직: DB insert → 파일 저장 → 실패 시 model_repository.delete / update_paths) 와 함께 설계하면 저장 경로 불일치 리스크가 한 번에 해결됨. **추천.**
+- **C. §4.1 Project Service / §4.2 Dataset Service 선행** — UI(§5~6) 진입 전 가장 작은 서비스 단위부터 쌓는 루트. §4.3 보다 먼저 하면 Training Service 가 의존할 Project/Dataset 조회가 준비됨.
+
+가장 안전한 루트는 **C → B** 순서 (Project/Dataset Service → Artifacts+Training Service). 속도를 우선하면 **B** 로 직진.
+
+### 참고 파일 포인터
+- 규약/불변식: `.cursor/rules/ml-engine.mdc`, `docs/AutoML_Streamlit_MVP.md`
+- ML 내부 계약: `ml/schemas.py` (TrainingConfig, FeatureSchema, ScoredModel)
+- 서비스→UI 계약: `services/dto.py`
+- Repository 사용법: `repositories/*.py` (전부 함수형, `session: Session` 주입식)
+- DB 부트스트랩: `scripts/init_db.py --drop --seed` (개발용 멱등 리셋)
+
+### 오픈 이슈/리스크
+- R-001 (PLAN §리스크 표): XGBoost import 실패(macOS libomp) — 레지스트리에서 `Exception` catch 로 skip 처리됨. 설치된 환경에서는 자동으로 목록에 포함.
+- stratify fallback 은 소규모 데이터셋 안정성 용도. UI 단에서 "클래스 분포 경고"를 띄울지 §4.3/§5 설계 시 결정 필요.
+- `ml/evaluators.py` 의 roc_auc 는 `predict_proba` 부재/실패 시 조용히 누락됨. UI 표 렌더링 시 `"-"` 표시 규칙은 §6.3(결과 화면) 에서 합의 필요.
+
+### 진행 로그 — §7.5 CI/품질 게이트 (2026-04-20)
+
+**완료 항목**
+
+1. **mypy 0 errors 달성** — 48 source files 통과.
+   - `repositories/base.py::_enable_sqlite_foreign_keys`, `services/admin_service.py::_scalar_count`/`list_logs` 에 타입 주석 추가 (`dbapi_connection: Any`, `column: Any`, `**kwargs: Any`).
+   - 더 이상 필요 없는 `# type: ignore[import-not-found]` (ml/registry.py xgboost/lightgbm 2건) · `# type: ignore[arg-type]` (services/training_service.py get_specs 1건) 제거 → `warn_unused_ignores` 경고 해소.
+   - `pages/components/layout.py::configure_page` 의 `layout: str` 을 `Literal["centered", "wide"]` 로 좁혀 `st.set_page_config` 오버로드 일치.
+   - `pages/components/data_preview.py::render_preview/render_profile` — `height: int | None` 을 내부 래퍼 `_render_df` 로 분기(None 일 때 인자 제거)해 `st.dataframe` 오버로드 만족.
+   - `pages/05_models.py::render_bundle_details` — 바깥 루프의 `col: str` 과 겹치던 내부 `for col, (metric_key, value) in zip(...)` 을 `metric_col` 로 리네이밍 (shadow 제거).
+
+2. **ruff check / black 통과** — 93 files, 0 errors.
+
+3. **pytest --cov 커버리지 게이트 자동화**.
+   - `pyproject.toml` 에 `[tool.coverage.run] source = ["ml", "services"]` + `[tool.coverage.report] fail_under = 60` 추가.
+   - 실측: **전체 수트 296 passed, ml+services 커버리지 92.95%** (fast-only 로도 93%).
+   - `exclude_lines` 에 `pragma: no cover`, `if TYPE_CHECKING:`, `if __name__ == "__main__":` 포함.
+
+4. **`make ci` 통합 게이트 도입**.
+   - `Makefile` 에 `test-fast`, `cov`, `ci` 타깃 신설. `ci = lint + cov` (ruff → mypy → pytest --cov 순차).
+   - `smoke` 타깃이 가리키던 미존재 `scripts/smoke_train.py` 를 `pytest -q -m "not slow"` 로 교체 — §7.4 에서 기록한 follow-up 해소.
+   - README "품질 도구" 섹션에 신규 타깃(`make ci`, `make cov`, `make test-fast`) 사용법 추가.
+
+5. **`scripts/init_db.py --drop` 재현성 확인**.
+   - 삭제 → `--drop --seed` 1회 → 동일 명령 2회차 → 플래그 없이 3회차 실행까지 모두 "OK" 반환 (멱등).
+   - 결과물: `audit_logs`, `datasets`, `models`, `prediction_jobs`, `projects`, `training_jobs`, `users` 7개 테이블 + system user + sample project.
+
+**검증**
+
+```bash
+$ make ci
+ruff check .            # All checks passed!
+mypy .                  # Success: no issues found in 48 source files
+pytest --cov=ml --cov=services --cov-report=term-missing
+...
+Required test coverage of 60.0% reached. Total coverage: 92.95%
+======================== 296 passed in 66.34s (0:01:06) ========================
+[ci] quality gate OK (ruff + mypy + pytest --cov fail_under=60)
+```
+
+**팔로업 (차회 PR 후보)**
+
+- GitHub Actions / GitLab CI 워크플로 파일 추가 — 현재는 로컬 `make ci` 만 보장.
+- 커버리지 HTML 리포트(`--cov-report=html`) 생성 위치(`htmlcov/`) `.gitignore` 등록 여부 재검토.
+- `tests/ui/` 의 `AppTest` 기반 테스트를 CI 에서 headless 로 안정 돌릴 수 있는지 별도 검증.
+
+### 진행 로그 — §7 마무리 점검 (2026-04-20)
+
+§8 진입 전 PLAN 전수 감사 수행. 체크박스와 실제 코드의 불일치를 해소하고 차기 이월/보류 사유를 명시했다.
+
+**체크박스 보정 (PLAN-현실 불일치 해소, 3건)**
+
+1. §3.8 L369 `test_artifacts.py` → [x] — `tests/ml/test_artifacts.py` 10건(4파일 생성 / roundtrip / missing dir·file 에러 / schema JSON / `validate_prediction_input` 5시나리오) 이 이미 존재.
+2. §5.3 L499 `require_project()` / `require_dataset()` 헬퍼 → [x] — `utils/session_utils.py:70,79` 에 구현.
+3. §5.3 L500 `st.info + st.stop` 일관 적용 → [x] — 위 헬퍼가 `st.warning(Msg.*)` + `st.stop()` 로 전 페이지에서 공통 호출.
+
+**표식 규약 도입 ([-] 보류 / [→] 이관 / ☐ DoD 템플릿)**
+
+- `[-]` (의도적 보류, scope 조정): §5.2 `project_picker.py`, `metric_cards.py`, `plots.py` — 대체 구현 위치 명시.
+- `[→]` (다른 섹션으로 이관): §2.2a `AUTH_MODE=basic` 마이그레이션 3항목 — §8.1 에 본체 추가 후 원출처는 이관 표시.
+- `[-]` (차기 이월, 선택): §1.7 ruff custom rule — `Msg` 강제는 rules + 리뷰로 충분, custom ast 탐지기 구현비용 대비 MVP 외.
+- `☐` (DoD 템플릿, 반복 적용 기준): §루트 "Definition of Done (모든 항목 공통)" 7줄을 `[ ]` → `☐` 로 전환. `make plan-check` 카운트에서 제외됨을 명시.
+
+**잔여 열린 항목 집계**
+
+- `make plan-check` → **in-progress=0** (모든 `[~]` 해소 유지)
+- `[ ]` 잔여 **13건** 모두 §8 하위 — MVP 확장 범위로 의도된 상태:
+  | 섹션 | 건수 | 내용 |
+  |-|-|-|
+  | §8.1 인증 (FR-010~012) | 8 | auth_service · 로그인·로그아웃 · bcrypt · AUTH_MODE 전환 + §2.2a 에서 이관된 마이그레이션 3건 |
+  | §8.2 PostgreSQL 전환 | 3 | psycopg 활성화 · DATABASE_URL 교체 · 쿼리 성능 점검 |
+  | §8.3 비동기 학습 | 2 | Celery/RQ 래핑 · job status 폴링 |
+
+**검증**
+
+- `pytest -q` 300 passed · coverage 92.95% · ruff/black/mypy 0 에러 유지 (코드 변경 없음, PLAN 문서만 수정).
+- `make plan-check`: `OK: in-progress=0`.

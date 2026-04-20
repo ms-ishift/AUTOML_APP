@@ -1,0 +1,91 @@
+---
+description: AutoML Streamlit MVP 프로젝트 전반 원칙 (레이어 분리, 확장성, 금지 사항)
+alwaysApply: true
+---
+
+# AutoML Streamlit MVP — 핵심 원칙
+
+이 프로젝트는 `AutoML_Streamlit_MVP.md`(요구사항)와 `ARCHITECTURE.md`(설계)를 기준으로 한다. 구현 전에 반드시 두 문서의 관련 절을 참조한다.
+
+## 레이어 경계 (엄격 준수)
+
+```
+UI (app.py, pages/*)  →  services/*  →  repositories/*  &  ml/*
+```
+
+- **UI → Service만 호출**. UI에서 `repositories/`, `ml/` 직접 import 금지.
+- **Service → Repository + ML만 오케스트레이션**. Service는 `st.*` 사용 금지.
+- **ml/ 모듈은 순수 함수**: `pandas`/`numpy`/`sklearn`만 의존. `streamlit`, `sqlalchemy` import 금지.
+- **repositories/ 는 DB만 다룸**. 비즈니스 규칙을 넣지 않는다.
+
+## 금지 사항
+
+- ❌ `pages/*.py`에서 SQL, joblib 로드, 모델 학습 직접 호출
+- ❌ Service 반환값에 `st.*` 객체/`DataFrame` 원본 노출 → DTO(dataclass) 또는 기본 타입만 반환
+- ❌ `print()` 디버깅 — 반드시 `utils/log_utils.py`의 logger 사용
+- ❌ 하드코딩된 경로/환경값 — `config/settings.py`의 `settings` 객체 사용
+- ❌ 광범위한 `except Exception: pass` — `utils/errors.py`의 도메인 예외로 변환
+
+## 네이밍
+
+- 파일: `snake_case.py`
+- 서비스 함수: 동사 시작 (`create_project`, `run_training`, `predict_single`)
+- DTO: `~DTO`, `~Config`, `~Result` suffix (dataclass)
+- 예외: `~Error` (모두 `AppError` 상속)
+
+## 파일 배치 규약
+
+- **Service 반환 DTO** (UI ↔ Service 교환용): `services/dto.py`
+- **ML 내부 구조체** (Streamlit/DB 비의존): `ml/schemas.py`
+- **사용자 노출 한글 메시지**: `utils/messages.py` 의 `Msg` 클래스 상수
+- **로그 이벤트명/AuditLog action_type**: `utils/events.py` 의 `Event` 클래스 상수
+- **Streamlit 페이지 이동**: `st.switch_page("pages/xx.py")` 만 사용, URL 하드코딩 금지
+
+## 요구사항 추적
+
+모듈/함수 헤더에 해당 FR 번호를 주석으로 남겨 추적 가능성을 확보한다.
+
+```python
+def upload_dataset(project_id: int, file: UploadedFile) -> DatasetDTO:
+    """FR-030, FR-031, FR-034: 데이터 업로드/저장/유효성 검사."""
+```
+
+## 확장성 원칙
+
+- Service 시그니처는 FastAPI에서 그대로 호출 가능하도록 **Streamlit 타입 비의존** 유지.
+- 신규 알고리즘 추가는 `ml/registry.py` Spec 1개 등록으로 완료되어야 한다.
+- DB 전환(SQLite → Postgres)은 `DATABASE_URL` 교체만으로 동작해야 한다.
+
+## 작업 전 체크
+
+새 기능을 구현할 때는:
+1. `IMPLEMENTATION_PLAN.md` 에서 해당 작업 항목을 찾고 상태를 `[ ]` → `[~]` 로 변경한다.
+2. `AutoML_Streamlit_MVP.md` 에서 해당 FR을 읽는다.
+3. `ARCHITECTURE.md` §4(데이터 흐름), §6(ML 엔진)에서 해당 경로를 확인한다.
+4. 어느 레이어에 코드가 들어가야 하는지 결정한 뒤 작성한다.
+
+## 계획서(`IMPLEMENTATION_PLAN.md`) 유지 규약
+
+**계획서는 단일 진실(Single Source of Progress)이다. 코드보다 계획서를 먼저 수정한다.**
+
+- ✅ 작업 시작: 해당 항목 `[ ]` → `[~]` (동시에 `[~]` 는 1개만 유지 권장)
+- ✅ 작업 완료: "Definition of Done" 전부 충족 후 `[~]` → `[x]`
+- ✅ 막힘: `[~]` → `[!]` + 바로 아래 줄에 `> BLOCKED: <이유> / <후속조치>` 인용 + 리스크 레지스터에 행 추가
+- ✅ 스코프 변경(FR 추가/파일 추가/단계 이동): **먼저 계획서에 반영**하고, "변경 이력" 표에 한 줄 기록한 뒤 구현
+- ✅ 매 작업 종료 시 "진행 로그" 섹션에 `YYYY-MM-DD | 단계 X.Y | started|completed|blocked | 메모` 한 줄 append
+
+### 금지
+
+- ❌ 체크박스를 실제 검증 없이 `[x]` 로 표시
+- ❌ 계획서에 없는 새 파일/모듈을 먼저 만들기 (먼저 계획서에 항목 추가 → 구현)
+- ❌ 완료된 항목을 덮어쓰기 (완료 이력은 append-only)
+- ❌ 설계와 달라진 구현을 했는데 `ARCHITECTURE.md` 를 갱신하지 않음
+
+### Definition of Done (체크박스 `[x]` 조건)
+
+- 모듈 단위 테스트 통과
+- `ruff` / `mypy` 0 에러 (새 파일 범위)
+- 레이어 경계 준수
+- FR 번호 docstring 기재
+- 설계 변경 시 `ARCHITECTURE.md` 동기화
+- 계획서 체크박스 + 진행 로그 갱신

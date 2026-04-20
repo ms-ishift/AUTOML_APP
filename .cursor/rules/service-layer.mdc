@@ -1,0 +1,89 @@
+---
+description: Service / Repository 레이어 규칙 (비즈니스 로직, 트랜잭션, DTO)
+globs: services/**/*.py,repositories/**/*.py
+alwaysApply: false
+---
+
+# Service / Repository 레이어 규칙
+
+## Service 책임
+
+1. 입력 검증 (형식/권한/FR-034 같은 도메인 규칙)
+2. Repository + ML 모듈 오케스트레이션
+3. 트랜잭션 경계 관리 (하나의 유스케이스 = 하나의 DB 트랜잭션)
+4. 도메인 예외로의 변환 + 구조화 로깅
+5. **DTO 반환** — ORM 객체/DataFrame 원본/Streamlit 타입 반환 금지
+
+## Service 함수 시그니처 패턴
+
+```python
+from utils.log_utils import get_logger
+from utils.errors import ValidationError, NotFoundError
+from repositories.base import session_scope
+from repositories import project_repository
+from ml.schemas import ProjectDTO
+
+logger = get_logger(__name__)
+
+def create_project(name: str, description: str | None = None) -> ProjectDTO:
+    """FR-020: 프로젝트 생성."""
+    if not name or len(name) > 100:
+        raise ValidationError("프로젝트명은 1~100자여야 합니다.")
+
+    with session_scope() as session:
+        project = project_repository.insert(session, name=name, description=description)
+        logger.info("project.created", extra={"project_id": project.id})
+        return ProjectDTO.from_orm(project)
+```
+
+## Repository 책임
+
+- SQLAlchemy 쿼리/CRUD만 담당.
+- **Repository는 세션을 받아서 사용**한다. 세션을 내부에서 만들지 않는다.
+- 비즈니스 규칙, 로깅, 예외 변환은 Service의 몫.
+
+```python
+# repositories/project_repository.py
+from sqlalchemy.orm import Session
+from repositories.models import Project
+
+def insert(session: Session, *, name: str, description: str | None) -> Project:
+    project = Project(name=name, description=description)
+    session.add(project)
+    session.flush()
+    return project
+
+def get_by_id(session: Session, project_id: int) -> Project | None:
+    return session.get(Project, project_id)
+```
+
+## 트랜잭션
+
+모든 쓰기 유스케이스는 `session_scope()` 컨텍스트 매니저를 사용.
+
+```python
+with session_scope() as session:
+    # 여러 repository 호출
+    ...
+# 블록 종료 시 commit, 예외 시 rollback
+```
+
+## 금지 사항
+
+- Service에서 `st.*` 또는 Streamlit 타입 참조 ❌
+- Repository에서 `try/except` 남발 ❌ (예외는 Service로 전파)
+- 여러 트랜잭션을 한 유스케이스에서 사용 ❌ (원자성 깨짐)
+- DTO가 아닌 ORM 엔터티를 UI로 반환 ❌
+
+## 감사 로그 (FR-092, NFR-007)
+
+다음 액션은 반드시 `audit_repository.write(...)` 호출:
+- 프로젝트 생성/수정/삭제
+- 데이터셋 업로드 성공/실패
+- 학습 start/end/fail
+- 모델 저장
+- 예측 수행
+
+## 테스트 (tests/services/*)
+
+Service 테스트는 **in-memory SQLite** + 임시 storage 디렉터리로 수행하며, Streamlit 없이 import/실행 가능해야 한다. 이것이 깨지면 레이어 경계가 틀어진 것이다.

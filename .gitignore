@@ -1,0 +1,37 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# --- Env / Secrets ---
+.env
+.env.*
+!.env.example
+
+# --- App artifacts ---
+db/*.db
+db/*.sqlite*
+storage/datasets/*
+storage/models/*
+storage/predictions/*
+storage/logs/*
+!storage/datasets/.gitkeep
+!storage/models/.gitkeep
+!storage/predictions/.gitkeep
+!storage/logs/.gitkeep
+
+# --- IDE / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Streamlit ---
+.streamlit/secrets.toml

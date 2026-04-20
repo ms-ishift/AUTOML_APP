@@ -1,0 +1,32 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.7.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/psf/black
+    rev: 24.10.0
+    hooks:
+      - id: black
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.13.0
+    hooks:
+      - id: mypy
+        additional_dependencies:
+          - pydantic
+          - pydantic-settings
+        args: [--ignore-missing-imports]
+        pass_filenames: false
+        entry: mypy .
+
+  - repo: local
+    hooks:
+      - id: plan-staged
+        name: IMPLEMENTATION_PLAN.md 동반 스테이지 확인
+        entry: scripts/check_plan_staged.sh
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]

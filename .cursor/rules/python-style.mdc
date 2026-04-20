@@ -1,0 +1,71 @@
+---
+description: Python 코딩 스타일 (타입힌트, 예외, 로깅, dataclass)
+globs: **/*.py
+alwaysApply: false
+---
+
+# Python 스타일
+
+- Python 3.11+ / PEP 8 / `ruff` + `black` 준수.
+- 모든 공개 함수에 **타입힌트 필수**. 반환이 없으면 `-> None`.
+- 가변 기본 인자 금지 (`def f(x=[])` ❌). `None` + 분기 또는 `field(default_factory=list)`.
+- 함수 길이 40줄 이내 권장. 넘으면 헬퍼로 분리.
+
+## Dataclass / DTO
+
+Service 경계의 데이터는 `@dataclass(frozen=True, slots=True)`로 정의한다.
+
+```python
+from dataclasses import dataclass
+
+@dataclass(frozen=True, slots=True)
+class TrainingConfig:
+    dataset_id: int
+    task_type: str  # "classification" | "regression"
+    target_column: str
+    excluded_columns: tuple[str, ...] = ()
+    test_size: float = 0.2
+    metric_key: str = "f1"
+```
+
+## 예외 처리
+
+```python
+# ❌ BAD
+try:
+    run()
+except Exception:
+    pass
+
+# ✅ GOOD
+from utils.errors import MLTrainingError
+from utils.log_utils import get_logger
+
+logger = get_logger(__name__)
+
+try:
+    run()
+except ValueError as e:
+    logger.exception("training.failed", extra={"job_id": job_id})
+    raise MLTrainingError("학습에 실패했습니다. 입력 데이터를 확인해주세요.") from e
+```
+
+## 로깅
+
+- `print()` 금지. `get_logger(__name__)` 사용.
+- 메시지는 이벤트명(`"training.started"`) + 구조화 필드(`extra`) 형태.
+- 사용자 노출 메시지(한글)와 로그 메시지(영문 이벤트명)를 분리한다.
+
+## Import 순서
+
+1. 표준 라이브러리
+2. 서드파티 (pandas, sklearn, streamlit)
+3. 로컬 (config, services, ml, repositories, utils)
+
+각 그룹 사이 빈 줄 1개. 상대 import (`from ..x`) 금지 — 항상 절대 import.
+
+## 금지 패턴
+
+- 모듈 최상위에서 무거운 I/O (DB 연결, 모델 로드) 실행 ❌
+- 전역 가변 상태 ❌ (Streamlit 세션 또는 DI로 해결)
+- `type: ignore` 남용 — 추가할 때는 이유 주석 필수

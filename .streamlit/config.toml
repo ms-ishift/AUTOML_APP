@@ -1,0 +1,9 @@
+# 이 파일의 maxUploadSize 는 scripts/sync_streamlit_config.py 가
+# .env 의 MAX_UPLOAD_MB 값으로 덮어씁니다. 수동 편집 시 동기화 스크립트가 다시 덮어쓸 수 있음.
+
+[server]
+maxUploadSize = 200
+headless = true
+
+[theme]
+base = "light"
