@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from datetime import datetime
 
+    from ml.schemas import PreprocessingConfig
     from repositories.models import Dataset, Model, PredictionJob, Project, TrainingJob
 
 
@@ -278,3 +279,91 @@ class AuditLogEntryDTO:
     target_id: int | None
     action_time: datetime
     detail: dict[str, Any] = field(default_factory=dict)
+
+
+# -------------------------------------------------------- Preprocessing (§9.7)
+
+
+@dataclass(frozen=True, slots=True)
+class PreprocessingConfigDTO:
+    """UI ↔ Service 경계에서 오가는 고급 전처리 설정 DTO (FR-055~058).
+
+    ``PreprocessingConfig`` (ml 레이어) 와 1:1 대응하지만 JSON/폼 친화적으로
+    ``tuple`` → ``list`` 로 평면화되어 있다. ``to_config`` / ``from_config`` 로
+    경계에서 변환.
+    """
+
+    numeric_impute: str = "median"
+    numeric_scale: str = "standard"
+    outlier: str = "none"
+    outlier_iqr_k: float = 1.5
+    winsorize_p: float = 0.01
+    categorical_impute: str = "most_frequent"
+    categorical_encoding: str = "onehot"
+    highcard_threshold: int = 50
+    highcard_auto_downgrade: bool = True
+    datetime_decompose: bool = False
+    datetime_parts: list[str] = field(default_factory=list)
+    bool_as_numeric: bool = True
+    imbalance: str = "none"
+    smote_k_neighbors: int = 5
+
+    @classmethod
+    def from_config(cls, config: PreprocessingConfig) -> PreprocessingConfigDTO:
+        return cls(
+            numeric_impute=config.numeric_impute,
+            numeric_scale=config.numeric_scale,
+            outlier=config.outlier,
+            outlier_iqr_k=config.outlier_iqr_k,
+            winsorize_p=config.winsorize_p,
+            categorical_impute=config.categorical_impute,
+            categorical_encoding=config.categorical_encoding,
+            highcard_threshold=config.highcard_threshold,
+            highcard_auto_downgrade=config.highcard_auto_downgrade,
+            datetime_decompose=config.datetime_decompose,
+            datetime_parts=list(config.datetime_parts),
+            bool_as_numeric=config.bool_as_numeric,
+            imbalance=config.imbalance,
+            smote_k_neighbors=config.smote_k_neighbors,
+        )
+
+    def to_config(self) -> PreprocessingConfig:
+        # Local import to keep ml/ 의존을 typing 범위로 격리 (streamlit-ui.mdc 경계 유지).
+        from ml.schemas import PreprocessingConfig as _PC
+
+        return _PC(
+            numeric_impute=self.numeric_impute,  # type: ignore[arg-type]
+            numeric_scale=self.numeric_scale,  # type: ignore[arg-type]
+            outlier=self.outlier,  # type: ignore[arg-type]
+            outlier_iqr_k=self.outlier_iqr_k,
+            winsorize_p=self.winsorize_p,
+            categorical_impute=self.categorical_impute,  # type: ignore[arg-type]
+            categorical_encoding=self.categorical_encoding,  # type: ignore[arg-type]
+            highcard_threshold=self.highcard_threshold,
+            highcard_auto_downgrade=self.highcard_auto_downgrade,
+            datetime_decompose=self.datetime_decompose,
+            datetime_parts=tuple(self.datetime_parts),  # type: ignore[arg-type]
+            bool_as_numeric=self.bool_as_numeric,
+            imbalance=self.imbalance,  # type: ignore[arg-type]
+            smote_k_neighbors=self.smote_k_neighbors,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class FeaturePreviewDTO:
+    """피처 변환 미리보기 결과 (§9.7 / FR-058 / UI 소비용).
+
+    - ``n_cols_in``: 타깃/제외 컬럼을 뺀 입력 피처 개수.
+    - ``n_cols_out``: 예상되는 변환 후 열 수 (onehot 분해·datetime 파트 포함).
+      **실제 fit 없이** ``nunique`` / `datetime_parts` 등 메타데이터로 추정.
+    - ``derived``: ``(source, name, kind)`` 튜플 목록. onehot 은 `col__val` 형태.
+    - ``encoding_summary``: 범주형 컬럼별 실제 적용될 인코딩 (``onehot|ordinal|frequency``).
+    - ``auto_downgraded``: ``onehot`` 요청이었지만 고카디널리티로 ``frequency``
+      자동 강등된 컬럼명 목록.
+    """
+
+    n_cols_in: int
+    n_cols_out: int
+    derived: tuple[tuple[str, str, str], ...] = ()
+    encoding_summary: dict[str, str] = field(default_factory=dict)
+    auto_downgraded: tuple[str, ...] = ()

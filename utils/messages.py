@@ -45,6 +45,19 @@ class Msg:
     TRAINING_FAILED = "학습에 실패했습니다."
     TRAINING_RESULT_REQUIRED = "먼저 학습을 실행해 주세요."
 
+    # 고급 전처리 (FR-055~058, §9.9)
+    PREPROCESSING_ADVANCED_TITLE = "고급 전처리 (선택)"
+    PREPROCESSING_CUSTOM_BADGE = "⚙️ 커스텀 전처리 적용됨"
+    PREPROCESSING_PREVIEW_TITLE = "피처 변환 미리보기"
+    PREPROCESSING_PREVIEW_HINT = "아래 설정을 고정한 상태에서 미리 계산됩니다 (실제 학습은 수행하지 않음)."
+    PREPROCESSING_SMOTE_UNAVAILABLE = (
+        "imbalanced-learn 이 설치되지 않아 SMOTE 를 사용할 수 없습니다."
+    )
+    PREPROCESSING_SMOTE_CLASSIFICATION_ONLY = "SMOTE 는 분류 작업에서만 사용할 수 있습니다."
+    PREPROCESSING_PREVIEW_AUTO_DOWNGRADED = (
+        "고카디널리티로 판단되어 자동으로 frequency 인코딩으로 강등된 컬럼이 있습니다."
+    )
+
     # 모델 (FR-070~075)
     MODEL_SAVED = "모델이 저장되었습니다."
     MODEL_SAVE_REQUIRES_SUCCESS = "성공한 모델만 저장할 수 있습니다."

@@ -223,13 +223,46 @@ REGRESSORS = { ... }  # linear, ridge, lasso, rf, xgb/lgbm
 - 신규 알고리즘 추가는 Spec 1개 등록만으로 완료되어야 한다 (OCP).
 - Spec은 `name, estimator_factory(), default_params, supports_task`를 노출한다.
 
-### 6.2 전처리 (`ml/preprocess.py`)
+### 6.2 전처리 (`ml/preprocess.py` + `ml/feature_engineering.py` + `ml/balancing.py`)
 
 - `sklearn.compose.ColumnTransformer` 기반 단일 `Pipeline` 생성.
-- 정책 (FR-051~053):
-  - 수치형: 결측 → median, 스케일링 → StandardScaler (옵션)
+- **기본 정책** (FR-051~053, `PreprocessingConfig()` 의 MVP 동치):
+  - 수치형: 결측 → median, 스케일링 → StandardScaler
   - 범주형: 결측 → most_frequent, 인코딩 → OneHotEncoder(handle_unknown="ignore")
-- 파이프라인 객체는 모델 아티팩트와 **반드시 함께 저장** (예측 시 동일 변환 보장, §10.4).
+- **고급 전처리 (FR-055~058, §9.1~§9.9)** — 사용자 제어 축 (모두 `ml/schemas.py::PreprocessingConfig` 에 보관, UI 조작 시에만 활성):
+
+```
+입력 DataFrame
+   │
+   ▼
+ split_feature_types_v2 (numeric / categorical / datetime / bool 4분류, §9.2 type_inference)
+   │
+   ├─ numeric   ─ impute(median|mean|most_frequent|constant_zero)
+   │            └ optional outlier (iqr_clip(k) | winsorize(p))  — IQRClipper · Winsorizer (ml/preprocess.py)
+   │            └ scale(standard|minmax|robust|none)
+   │
+   ├─ categorical ─ impute(most_frequent|constant_missing)
+   │              └ plan_categorical_routing (onehot + highcard_auto_downgrade → frequency 강등)
+   │              └ encoder(onehot|ordinal|frequency)  — FrequencyEncoder (ml/preprocess.py)
+   │
+   ├─ datetime  ─ DatetimeDecomposer(parts=year|month|day|weekday|hour|is_weekend) (ml/feature_engineering.py)
+   │            └ SimpleImputer(median) — NaT coerce 후 파생 수치 보강
+   │
+   └─ bool      ─ BoolToNumeric(0/1) 또는 categorical 경로로 합류 (bool_as_numeric 스위치)
+           │
+           ▼
+      ColumnTransformer (auto_downgraded 정보는 _route_report_ 속성으로 UI 미리보기에 전달)
+           │
+           ▼  (학습 시, 분류 전용)
+      apply_imbalance_strategy (ml/balancing.py: none|class_weight|smote(k_neighbors))
+           │
+           ▼
+      Estimator.fit(X_resampled, y_resampled)
+```
+
+- `PreprocessingConfig` 는 **불변 dataclass** (frozen/slots). 기본 인스턴스는 MVP 동작과 **바이트 동치** — `is_default=True` 이면 `preprocessing_config.json` 아티팩트를 생성하지 않고 `training.preprocessing_customized` AuditLog 도 남기지 않는다(§9.6/§9.8 하위호환).
+- 파이프라인 객체(+ `_route_report_`)는 모델 아티팩트와 **반드시 함께 저장** (예측 시 동일 변환 보장, §10.4).
+- SMOTE 는 **분류 전용** 이고 `imblearn` 선택 의존 — `SMOTE_AVAILABLE=False` 면 `MLTrainingError` 승격. `TrainingConfig.__post_init__` 이 1차 가드, `apply_imbalance_strategy` 가 defense-in-depth 2차 가드.
 
 ### 6.3 평가 (`ml/evaluators.py`)
 
@@ -240,17 +273,19 @@ REGRESSORS = { ... }  # linear, ridge, lasso, rf, xgb/lgbm
 
 ### 6.4 아티팩트 (`ml/artifacts.py`)
 
-저장 레이아웃:
+저장 레이아웃 (§9.6 이후, 5파일):
 ```
 storage/models/<model_id>/
-  ├─ model.joblib           # fit 된 Pipeline (전처리+추정기)
-  ├─ preprocessor.joblib    # Pipeline 에서 추출된 ColumnTransformer 복제본
-  ├─ feature_schema.json    # 입력 컬럼/타입/카테고리값
-  └─ metrics.json           # 지표 + 혼동행렬/산점도 등 시각화 데이터
+  ├─ model.joblib                  # fit 된 Pipeline (전처리+추정기)
+  ├─ preprocessor.joblib           # Pipeline 에서 추출된 ColumnTransformer 복제본 (_route_report_ 포함)
+  ├─ feature_schema.json           # 입력 컬럼/타입/카테고리값 + datetime/derived 피처
+  ├─ preprocessing_config.json     # PreprocessingConfig (§9.1) — is_default 면 생성되지 않음 (하위호환)
+  └─ metrics.json                  # 지표 + 혼동행렬/산점도 등 시각화 데이터
 ```
 
 - `feature_schema.json` 은 예측 시 입력 폼 자동 생성(FR-082)과 입력 검증(FR-083)의 단일 출처(Single Source of Truth).
-- 저장·로드는 `save_model_bundle()` · `load_model_bundle()` 쌍을 통해서만 한다. 4개 파일 중 하나라도 누락되면 `FileNotFoundError` 로 실패한다.
+- `preprocessing_config.json` 은 §9.6 이후 추가된 5번째 파일. **파일이 없으면 레거시(v0.1.0) 모델**로 간주하고 `PreprocessingConfig()` (기본값)로 fallback + `Event.MODEL_LEGACY_PREPROCESSING_LOADED` 를 1회 `log_event`.
+- 저장·로드는 `save_model_bundle()` · `load_model_bundle()` 쌍을 통해서만 한다. **필수 4파일**(model / preprocessor / feature_schema / metrics) 중 하나라도 누락되면 `FileNotFoundError` 로 실패한다. `preprocessing_config.json` 만 예외적으로 **선택 사항**.
 - 부분 저장 실패 시 호출자(`training_service`) 가 디렉터리 단위 `shutil.rmtree` 로 롤백한다.
 
 ---

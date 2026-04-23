@@ -148,3 +148,81 @@ def test_prediction_result_dto_defaults() -> None:
     dto = PredictionResultDTO(job_id=1, rows=[{"y": 1}])
     assert dto.result_path is None
     assert dto.warnings == []
+
+
+# ---------------------------------------------------------- §9.7 Preprocessing
+
+
+class TestPreprocessingConfigDTO:
+    """§9.7: PreprocessingConfig ↔ PreprocessingConfigDTO 양방향 변환."""
+
+    def test_from_config_defaults(self) -> None:
+        from ml.schemas import PreprocessingConfig
+        from services.dto import PreprocessingConfigDTO
+
+        dto = PreprocessingConfigDTO.from_config(PreprocessingConfig())
+        assert dto.numeric_impute == "median"
+        assert dto.numeric_scale == "standard"
+        assert dto.outlier == "none"
+        assert dto.imbalance == "none"
+        assert dto.datetime_parts == []
+
+    def test_roundtrip_preserves_all_fields(self) -> None:
+        from ml.schemas import PreprocessingConfig
+        from services.dto import PreprocessingConfigDTO
+
+        original = PreprocessingConfig(
+            numeric_impute="median",
+            numeric_scale="robust",
+            outlier="iqr",
+            outlier_iqr_k=2.0,
+            winsorize_p=0.05,
+            categorical_impute="constant",
+            categorical_encoding="ordinal",
+            highcard_threshold=30,
+            highcard_auto_downgrade=False,
+            datetime_decompose=True,
+            datetime_parts=("year", "month"),
+            bool_as_numeric=False,
+            imbalance="class_weight",
+            smote_k_neighbors=3,
+        )
+        dto = PreprocessingConfigDTO.from_config(original)
+        restored = dto.to_config()
+        assert restored == original
+
+    def test_dto_is_frozen(self) -> None:
+        from services.dto import PreprocessingConfigDTO
+
+        dto = PreprocessingConfigDTO()
+        with pytest.raises(FrozenInstanceError):
+            dto.numeric_scale = "robust"  # type: ignore[misc]
+
+    def test_to_config_raises_on_invalid_combination(self) -> None:
+        """DTO 는 자유롭게 구성 가능하지만 to_config 단계에서 ml 레이어 검증이 적용된다."""
+        from services.dto import PreprocessingConfigDTO
+
+        bad = PreprocessingConfigDTO(datetime_decompose=True, datetime_parts=[])
+        with pytest.raises(ValueError, match="datetime_parts"):
+            bad.to_config()
+
+
+class TestFeaturePreviewDTO:
+    """§9.7: FeaturePreviewDTO 기본 구조 / 기본값 검증."""
+
+    def test_construct_with_minimal_fields(self) -> None:
+        from services.dto import FeaturePreviewDTO
+
+        preview = FeaturePreviewDTO(n_cols_in=3, n_cols_out=5)
+        assert preview.n_cols_in == 3
+        assert preview.n_cols_out == 5
+        assert preview.derived == ()
+        assert preview.encoding_summary == {}
+        assert preview.auto_downgraded == ()
+
+    def test_frozen_slots(self) -> None:
+        from services.dto import FeaturePreviewDTO
+
+        preview = FeaturePreviewDTO(n_cols_in=1, n_cols_out=1)
+        with pytest.raises(FrozenInstanceError):
+            preview.n_cols_in = 99  # type: ignore[misc]

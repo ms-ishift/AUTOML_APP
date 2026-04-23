@@ -1,4 +1,4 @@
-"""ml/artifacts.py 단위 테스트 (IMPLEMENTATION_PLAN §3.7)."""
+"""ml/artifacts.py 단위 테스트 (IMPLEMENTATION_PLAN §3.7 / §9.6)."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from sklearn.linear_model import LogisticRegression
 from ml.artifacts import (
     METRICS_FILENAME,
     MODEL_FILENAME,
+    PREPROCESSING_FILENAME,
     PREPROCESSOR_FILENAME,
     SCHEMA_FILENAME,
     ModelBundle,
@@ -21,7 +22,7 @@ from ml.artifacts import (
     validate_prediction_input,
 )
 from ml.preprocess import build_feature_schema, build_preprocessor, split_feature_types
-from ml.schemas import FeatureSchema
+from ml.schemas import FeatureSchema, PreprocessingConfig
 
 
 def _fit_bundle() -> tuple[object, object, FeatureSchema, dict[str, float]]:
@@ -199,3 +200,188 @@ def test_validate_categorical_casts_to_string(simple_schema: FeatureSchema) -> N
 def test_validate_rejects_empty(simple_schema: FeatureSchema) -> None:
     with pytest.raises(ValueError):
         validate_prediction_input(pd.DataFrame(), simple_schema)
+
+
+# ---------------------------------------------------------------- §9.6 bundle
+
+
+class TestPreprocessingConfigPersistence:
+    """§9.6: PreprocessingConfig 의 번들 저장/로드 왕복 및 하위호환."""
+
+    def test_model_bundle_default_preprocessing(self) -> None:
+        """ModelBundle.preprocessing 은 기본값이 제공되어 기존 인스턴스 생성자가 호환된다."""
+        schema = FeatureSchema(numeric=("x",), categorical=(), target="y")
+        bundle = ModelBundle(
+            estimator=object(),
+            preprocessor=object(),
+            schema=schema,
+            metrics={},
+        )
+        assert isinstance(bundle.preprocessing, PreprocessingConfig)
+        assert bundle.preprocessing.is_default
+
+    def test_save_without_preprocessing_config_skips_file(self, tmp_path: Path) -> None:
+        """preprocessing_config 인자 생략 시 preprocessing_config.json 이 생성되지 않는다 (구 모델 동치)."""
+        estimator, preprocessor, schema, metrics = _fit_bundle()
+        target_dir = tmp_path / "no_cfg"
+
+        paths = save_model_bundle(
+            target_dir,
+            estimator=estimator,
+            preprocessor=preprocessor,
+            schema=schema,
+            metrics=metrics,
+        )
+
+        assert "preprocessing" not in paths
+        assert not (target_dir / PREPROCESSING_FILENAME).exists()
+
+    def test_save_with_preprocessing_config_writes_json(self, tmp_path: Path) -> None:
+        """preprocessing_config 제공 시 JSON 파일 생성 및 경로 반환."""
+        estimator, preprocessor, schema, metrics = _fit_bundle()
+        target_dir = tmp_path / "with_cfg"
+        cfg = PreprocessingConfig(
+            numeric_impute="median",
+            numeric_scale="standard",
+            imbalance="class_weight",
+        )
+
+        paths = save_model_bundle(
+            target_dir,
+            estimator=estimator,
+            preprocessor=preprocessor,
+            schema=schema,
+            metrics=metrics,
+            preprocessing_config=cfg,
+        )
+
+        pp_path = target_dir / PREPROCESSING_FILENAME
+        assert pp_path.exists()
+        assert paths["preprocessing"] == pp_path
+        data = json.loads(pp_path.read_text("utf-8"))
+        assert data["imbalance"] == "class_weight"
+
+    def test_load_roundtrips_preprocessing_config(self, tmp_path: Path) -> None:
+        """save → load 왕복 시 PreprocessingConfig 가 동일한 값으로 복원되어야 한다."""
+        estimator, preprocessor, schema, metrics = _fit_bundle()
+        target_dir = tmp_path / "rt"
+        cfg = PreprocessingConfig(
+            numeric_impute="median",
+            outlier="iqr",
+            outlier_iqr_k=2.0,
+            numeric_scale="robust",
+            bool_as_numeric=False,
+            imbalance="smote",
+            smote_k_neighbors=3,
+        )
+        save_model_bundle(
+            target_dir,
+            estimator=estimator,
+            preprocessor=preprocessor,
+            schema=schema,
+            metrics=metrics,
+            preprocessing_config=cfg,
+        )
+
+        bundle = load_model_bundle(target_dir)
+        assert bundle.preprocessing == cfg
+        # Smoke check: estimator 는 여전히 예측 가능해야 한다
+        df = pd.DataFrame({"num_a": [0.1], "num_b": [0.2], "cat_a": ["x"]})
+        preds = bundle.estimator.predict(df)
+        assert len(preds) == 1
+
+    def test_load_legacy_bundle_falls_back_to_default_config(self, tmp_path: Path) -> None:
+        """preprocessing_config.json 이 없는 구 번들은 PreprocessingConfig() 기본값으로 복원 (§9.6 하위호환)."""
+        estimator, preprocessor, schema, metrics = _fit_bundle()
+        target_dir = tmp_path / "legacy"
+        save_model_bundle(
+            target_dir,
+            estimator=estimator,
+            preprocessor=preprocessor,
+            schema=schema,
+            metrics=metrics,
+        )
+        assert not (target_dir / PREPROCESSING_FILENAME).exists()
+
+        bundle = load_model_bundle(target_dir)
+        assert bundle.preprocessing == PreprocessingConfig()
+        assert bundle.preprocessing.is_default
+
+    def test_load_missing_preprocessing_file_does_not_break_required_check(
+        self, tmp_path: Path
+    ) -> None:
+        """preprocessing_config.json 은 _REQUIRED_FILES 에 포함되지 않으므로 부재만으로는 FileNotFoundError 발생하지 않는다."""
+        estimator, preprocessor, schema, metrics = _fit_bundle()
+        target_dir = tmp_path / "no_pp"
+        save_model_bundle(
+            target_dir,
+            estimator=estimator,
+            preprocessor=preprocessor,
+            schema=schema,
+            metrics=metrics,
+        )
+        load_model_bundle(target_dir)
+
+
+# ---------------------------------------------------------- §9.8 하위호환 로그
+
+
+class TestLegacyPreprocessingLoggedOnce:
+    """§9.8: 구 번들 로드 시 model.legacy_preprocessing_loaded 가 정확히 1회 emit."""
+
+    def test_legacy_bundle_emits_log_event(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from ml import artifacts as artifacts_mod
+        from utils.events import Event
+
+        estimator, preprocessor, schema, metrics = _fit_bundle()
+        target_dir = tmp_path / "legacy_logged"
+        save_model_bundle(
+            target_dir,
+            estimator=estimator,
+            preprocessor=preprocessor,
+            schema=schema,
+            metrics=metrics,
+        )
+
+        events: list[tuple[str, dict[str, object]]] = []
+
+        def _spy(_logger: object, event: str, **extra: object) -> None:
+            events.append((event, dict(extra)))
+
+        monkeypatch.setattr(artifacts_mod, "log_event", _spy)
+
+        load_model_bundle(target_dir)
+
+        legacy_events = [e for e in events if e[0] == Event.MODEL_LEGACY_PREPROCESSING_LOADED]
+        assert len(legacy_events) == 1
+        assert legacy_events[0][1].get("model_dir") == str(target_dir)
+
+    def test_modern_bundle_does_not_emit_legacy_log(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """preprocessing_config.json 이 존재하면 legacy 이벤트는 emit 되지 않는다."""
+        from ml import artifacts as artifacts_mod
+        from utils.events import Event
+
+        estimator, preprocessor, schema, metrics = _fit_bundle()
+        target_dir = tmp_path / "modern_no_log"
+        save_model_bundle(
+            target_dir,
+            estimator=estimator,
+            preprocessor=preprocessor,
+            schema=schema,
+            metrics=metrics,
+            preprocessing_config=PreprocessingConfig(numeric_scale="standard"),
+        )
+
+        events: list[str] = []
+        monkeypatch.setattr(
+            artifacts_mod,
+            "log_event",
+            lambda _logger, event, **_extra: events.append(event),
+        )
+
+        load_model_bundle(target_dir)
+        assert Event.MODEL_LEGACY_PREPROCESSING_LOADED not in events

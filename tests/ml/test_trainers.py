@@ -1,6 +1,8 @@
-"""ml.trainers 단위 테스트 (IMPLEMENTATION_PLAN §3.5)."""
+"""ml.trainers 단위 테스트 (IMPLEMENTATION_PLAN §3.5 / §9.6)."""
 
 from __future__ import annotations
+
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -8,6 +10,7 @@ import pytest
 
 from ml.preprocess import build_preprocessor
 from ml.registry import AlgoSpec, get_specs
+from ml.schemas import PreprocessingConfig
 from ml.trainers import TrainedModel, split_dataset, train_all
 
 
@@ -142,3 +145,106 @@ class TestTrainAll:
         preprocessors = [p.named_steps["preprocessor"] for p in pipelines]
         # 동일 객체가 아니어야 한다
         assert len({id(p) for p in preprocessors}) == len(preprocessors)
+
+
+class TestTrainAllBalancer:
+    """§9.6: train_all 의 balancer/preprocess_cfg 키워드 인자 확장 검증."""
+
+    def test_preprocess_cfg_passthrough_does_not_alter_behavior(
+        self, classification_data: tuple[pd.DataFrame, pd.Series]
+    ) -> None:
+        """preprocess_cfg 만 전달해도 balancer 없으면 기존 경로와 동일하게 학습 성공."""
+        X, y = classification_data
+        pre = build_preprocessor(["age", "income"], ["city"])
+        specs = get_specs("classification")[:1]
+        cfg = PreprocessingConfig()
+
+        results = train_all(specs, pre, X, y, preprocess_cfg=cfg)
+
+        assert len(results) == 1
+        assert results[0].is_success, results[0].error
+
+    def test_balancer_invoked_per_spec(
+        self, classification_data: tuple[pd.DataFrame, pd.Series]
+    ) -> None:
+        """balancer 는 각 spec 의 fresh estimator 에 대해 정확히 한 번씩 호출되어야 한다."""
+        X, y = classification_data
+        pre = build_preprocessor(["age", "income"], ["city"])
+        specs = get_specs("classification")[:2]
+
+        calls: list[tuple[str, int]] = []
+
+        def _balancer(
+            estimator: Any, X_in: pd.DataFrame, y_in: pd.Series
+        ) -> tuple[Any, pd.DataFrame, pd.Series]:
+            calls.append((type(estimator).__name__, len(X_in)))
+            return estimator, X_in, y_in
+
+        results = train_all(specs, pre, X, y, balancer=_balancer)
+
+        assert len(calls) == len(specs)
+        assert all(n == len(X) for _, n in calls)
+        for r in results:
+            assert r.is_success, r.error
+
+    def test_balancer_may_resample_training_data(
+        self, classification_data: tuple[pd.DataFrame, pd.Series]
+    ) -> None:
+        """balancer 가 X_train/y_train 을 치환(리샘플)한 경우 치환된 데이터로 fit 되어야 한다."""
+        X, y = classification_data
+        pre = build_preprocessor(["age", "income"], ["city"])
+        specs = get_specs("classification")[:1]
+
+        # 소수 클래스 업샘플링을 모사: 단순히 첫 N 행을 두 배로 복제
+        X_resampled = pd.concat([X, X.head(10)], ignore_index=True)
+        y_resampled = pd.concat([y, y.head(10)], ignore_index=True)
+
+        def _balancer(
+            estimator: Any, _X: pd.DataFrame, _y: pd.Series
+        ) -> tuple[Any, pd.DataFrame, pd.Series]:
+            return estimator, X_resampled, y_resampled
+
+        results = train_all(specs, pre, X, y, balancer=_balancer)
+
+        assert results[0].is_success
+        # 원본 X/y 는 불변
+        assert len(X) == len(y) == len(classification_data[0])
+
+    def test_balancer_failure_is_isolated_per_spec(
+        self, classification_data: tuple[pd.DataFrame, pd.Series]
+    ) -> None:
+        """balancer 호출 자체가 실패해도 해당 spec 만 failed 로 기록되고 다음 spec 은 진행."""
+        X, y = classification_data
+        pre = build_preprocessor(["age", "income"], ["city"])
+        specs = get_specs("classification")[:2]
+
+        seen = {"count": 0}
+
+        def _balancer(
+            estimator: Any, X_in: pd.DataFrame, y_in: pd.Series
+        ) -> tuple[Any, pd.DataFrame, pd.Series]:
+            seen["count"] += 1
+            if seen["count"] == 1:
+                raise RuntimeError("balancer synthetic boom")
+            return estimator, X_in, y_in
+
+        results = train_all(specs, pre, X, y, balancer=_balancer)
+
+        assert not results[0].is_success
+        assert results[0].error is not None
+        assert "balancer synthetic boom" in results[0].error
+        assert results[1].is_success
+
+    def test_default_kwargs_preserve_legacy_behavior(
+        self, classification_data: tuple[pd.DataFrame, pd.Series]
+    ) -> None:
+        """preprocess_cfg/balancer 둘 다 생략하면 기존 호출 시그니처 결과와 동일해야 한다."""
+        X, y = classification_data
+        pre = build_preprocessor(["age", "income"], ["city"])
+        specs = get_specs("classification")[:1]
+
+        legacy = train_all(specs, pre, X, y)
+        extended = train_all(specs, pre, X, y, preprocess_cfg=None, balancer=None)
+
+        assert [r.is_success for r in legacy] == [r.is_success for r in extended]
+        assert [r.algo_name for r in legacy] == [r.algo_name for r in extended]

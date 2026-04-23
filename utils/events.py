@@ -30,11 +30,13 @@ class Event:
     TRAINING_COMPLETED = "training.completed"
     TRAINING_FAILED = "training.failed"
     MODEL_TRAIN_FAILED = "training.model_failed"  # 개별 알고리즘 실패
+    TRAINING_PREPROCESSING_CUSTOMIZED = "training.preprocessing_customized"  # FR-055~058, §9.8
 
     # 모델/아티팩트
     MODEL_SAVED = "model.saved"
     MODEL_DELETED = "model.deleted"
     ARTIFACT_SAVE_FAILED = "artifact.save_failed"
+    MODEL_LEGACY_PREPROCESSING_LOADED = "model.legacy_preprocessing_loaded"  # §9.8 하위호환
 
     # 예측
     PREDICTION_STARTED = "prediction.started"

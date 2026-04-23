@@ -15,11 +15,13 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from typing import TYPE_CHECKING
 
 import streamlit as st
 
 from pages.components.layout import (
+    MANUAL_PAGE_PATH,
     configure_page,
     render_page_header,
     render_sidebar,
@@ -117,8 +119,13 @@ def _render_cta(db_ready: bool) -> None:
             )
             st.rerun()
     with c2:
-        if st.button("문서 보기", width="stretch"):
-            st.toast("AutoML_Streamlit_MVP.md / IMPLEMENTATION_PLAN.md 를 참고하세요.")
+        if st.button(
+            "📘 매뉴얼 보기",
+            width="stretch",
+            help="앱 내 매뉴얼 허브로 이동합니다.",
+        ):
+            with suppress(Exception):  # switch_page 는 테스트 환경에서 예외 가능
+                st.switch_page(MANUAL_PAGE_PATH)
 
 
 def _load_recent_projects(db_ready: bool) -> list[ProjectDTO]:

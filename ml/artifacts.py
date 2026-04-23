@@ -1,11 +1,12 @@
-"""모델 아티팩트 직렬화 (IMPLEMENTATION_PLAN §3.7, FR-073, 요구사항 §10.4).
+"""모델 아티팩트 직렬화 (IMPLEMENTATION_PLAN §3.7 / §9.6, FR-073, 요구사항 §10.4).
 
 레이아웃 (``storage/models/<model_id>/``)::
 
-    model.joblib          # 전체 파이프라인 (preprocessor + estimator)
-    preprocessor.joblib   # fit 된 ColumnTransformer (파이프라인에서 추출)
-    feature_schema.json   # 예측 입력 폼 + 입력 검증의 단일 출처 (FR-082, FR-083)
-    metrics.json          # 성능/메타 정보 스냅샷
+    model.joblib                # 전체 파이프라인 (preprocessor + estimator)
+    preprocessor.joblib         # fit 된 ColumnTransformer (파이프라인에서 추출)
+    feature_schema.json         # 예측 입력 폼 + 입력 검증의 단일 출처 (FR-082, FR-083)
+    metrics.json                # 성능/메타 정보 스냅샷
+    preprocessing_config.json   # §9.6: 선택적, 고급 전처리 설정 (없으면 기본값)
 
 원칙 (``.cursor/rules/ml-engine.mdc``):
 - 이 모듈은 **Streamlit/DB 비의존**. 업로드/조회는 상위 Service 가 오케스트레이션.
@@ -13,27 +14,38 @@
   누락 컬럼을 차단하고 추가 컬럼은 조용히 제거한다 (§10.4).
 - 예외는 pure ``ValueError`` / ``FileNotFoundError`` 로 발생. ``utils.errors`` 로의
   변환은 Service 레이어 책임 (ml → utils 결합을 피해 레이어 경계를 지킨다).
+
+§9.6 하위호환:
+- ``preprocessing_config.json`` 은 선택(optional) 파일. 구 모델(파일 부재) 로드 시
+  ``ModelBundle.preprocessing`` 은 ``PreprocessingConfig()`` 기본값으로 복원된다.
+- 필수 파일 검사에는 포함되지 않는다 (``_REQUIRED_FILES``).
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import joblib
 
-from ml.schemas import FeatureSchema
+from ml.schemas import FeatureSchema, PreprocessingConfig
+from utils.events import Event
+from utils.log_utils import get_logger, log_event
 
 if TYPE_CHECKING:
     import pandas as pd
+
+
+logger = get_logger(__name__)
 
 
 MODEL_FILENAME = "model.joblib"
 PREPROCESSOR_FILENAME = "preprocessor.joblib"
 SCHEMA_FILENAME = "feature_schema.json"
 METRICS_FILENAME = "metrics.json"
+PREPROCESSING_FILENAME = "preprocessing_config.json"
 
 _REQUIRED_FILES: tuple[str, ...] = (
     MODEL_FILENAME,
@@ -49,12 +61,14 @@ class ModelBundle:
 
     ``estimator`` 는 일반적으로 ``sklearn.pipeline.Pipeline`` (전처리+추정기)이며,
     ``preprocessor`` 는 같은 파이프라인에서 추출된 fit 된 transformer 의 독립 복제본.
+    ``preprocessing`` 은 학습 당시 적용된 고급 전처리 설정 (§9.6, 하위호환을 위해 기본값).
     """
 
     estimator: Any
     preprocessor: Any
     schema: FeatureSchema
     metrics: dict[str, Any]
+    preprocessing: PreprocessingConfig = field(default_factory=PreprocessingConfig)
 
 
 # ---------------------------------------------------------------- save/load
@@ -67,16 +81,19 @@ def save_model_bundle(
     preprocessor: Any,
     schema: FeatureSchema,
     metrics: dict[str, Any],
+    preprocessing_config: PreprocessingConfig | None = None,
 ) -> dict[str, Path]:
-    """4개 파일을 생성하고 각 경로를 dict 로 반환.
+    """4개 필수 파일 + (선택) ``preprocessing_config.json`` 을 생성하고 경로 dict 반환.
 
     - 디렉터리는 idempotent 하게 생성된다.
     - 파일 쓰기 중간 실패가 발생하면 호출자가 디렉터리 단위로 정리(``shutil.rmtree``)해야 한다.
+    - ``preprocessing_config`` 이 주어지면 ``preprocessing_config.json`` 이 함께 생성된다.
+      생략 시 파일 미생성 → 구 모델 디렉터리와 바이트 동치 유지.
     """
     target_dir = Path(target_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    paths = {
+    paths: dict[str, Path] = {
         "model": target_dir / MODEL_FILENAME,
         "preprocessor": target_dir / PREPROCESSOR_FILENAME,
         "schema": target_dir / SCHEMA_FILENAME,
@@ -93,11 +110,24 @@ def save_model_bundle(
         json.dumps(metrics, ensure_ascii=False, indent=2, default=str),
         encoding="utf-8",
     )
+
+    if preprocessing_config is not None:
+        pp_path = target_dir / PREPROCESSING_FILENAME
+        pp_path.write_text(
+            json.dumps(preprocessing_config.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        paths["preprocessing"] = pp_path
+
     return paths
 
 
 def load_model_bundle(source_dir: Path | str) -> ModelBundle:
-    """4개 파일을 읽어 ``ModelBundle`` 로 복원. 어느 하나라도 누락이면 ``FileNotFoundError``."""
+    """필수 4파일을 읽어 ``ModelBundle`` 로 복원. 어느 하나라도 누락이면 ``FileNotFoundError``.
+
+    ``preprocessing_config.json`` 은 선택. 부재 시 ``PreprocessingConfig()`` 기본값으로 채운다
+    (§9.6 하위호환).
+    """
     source_dir = Path(source_dir)
     if not source_dir.is_dir():
         raise FileNotFoundError(f"모델 디렉터리가 없습니다: {source_dir}")
@@ -111,11 +141,25 @@ def load_model_bundle(source_dir: Path | str) -> ModelBundle:
     schema_raw = json.loads((source_dir / SCHEMA_FILENAME).read_text(encoding="utf-8"))
     schema = FeatureSchema.from_dict(schema_raw)
     metrics = json.loads((source_dir / METRICS_FILENAME).read_text(encoding="utf-8"))
+
+    pp_path = source_dir / PREPROCESSING_FILENAME
+    if pp_path.exists():
+        pp_raw = json.loads(pp_path.read_text(encoding="utf-8"))
+        preprocessing = PreprocessingConfig.from_dict(pp_raw)
+    else:
+        preprocessing = PreprocessingConfig()
+        log_event(
+            logger,
+            Event.MODEL_LEGACY_PREPROCESSING_LOADED,
+            model_dir=str(source_dir),
+        )
+
     return ModelBundle(
         estimator=estimator,
         preprocessor=preprocessor,
         schema=schema,
         metrics=metrics,
+        preprocessing=preprocessing,
     )
 
 
@@ -158,12 +202,13 @@ def validate_prediction_input(df: pd.DataFrame, schema: FeatureSchema) -> pd.Dat
 
 
 __all__ = [
+    "METRICS_FILENAME",
     "MODEL_FILENAME",
+    "PREPROCESSING_FILENAME",
     "PREPROCESSOR_FILENAME",
     "SCHEMA_FILENAME",
-    "METRICS_FILENAME",
     "ModelBundle",
-    "save_model_bundle",
     "load_model_bundle",
+    "save_model_bundle",
     "validate_prediction_input",
 ]

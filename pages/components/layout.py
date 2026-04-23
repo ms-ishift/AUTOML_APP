@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
 NAV_ITEMS: tuple[tuple[str, str], ...] = (
     ("홈", "app.py"),
+    ("매뉴얼", "pages/00_manual.py"),
     ("프로젝트", "pages/01_projects.py"),
     ("데이터 업로드", "pages/02_dataset_upload.py"),
     ("학습", "pages/03_training.py"),
@@ -33,6 +34,8 @@ NAV_ITEMS: tuple[tuple[str, str], ...] = (
     ("예측", "pages/06_prediction.py"),
     ("이력/관리자", "pages/07_admin.py"),
 )
+
+MANUAL_PAGE_PATH: str = "pages/00_manual.py"
 
 
 def configure_page(title: str, *, layout: Literal["centered", "wide"] = "wide") -> None:
@@ -97,6 +100,16 @@ def render_sidebar(
             st.markdown(f"- {label}")
         st.caption("왼쪽 네비게이션에서 페이지를 선택하세요.")
 
+        st.divider()
+        if st.button(
+            "📘 매뉴얼 열기",
+            key="sidebar_open_manual",
+            width="stretch",
+            help="전체 매뉴얼을 한 화면에서 검색/확인합니다.",
+        ):
+            with suppress(Exception):  # switch_page 는 일부 테스트 환경에서 예외
+                st.switch_page(MANUAL_PAGE_PATH)
+
 
 def render_page_header(
     title: str,
@@ -119,6 +132,7 @@ def current_project_id() -> int | None:
 
 
 __all__ = [
+    "MANUAL_PAGE_PATH",
     "NAV_ITEMS",
     "configure_page",
     "current_project_id",

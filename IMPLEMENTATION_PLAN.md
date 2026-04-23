@@ -1,7 +1,7 @@
 # AutoML Streamlit MVP — 구현 계획 (체크리스트)
 
-**문서 버전:** 0.3
-**최근 갱신:** 2026-04-17 (0.2 유지 규칙 → 0.3 보강: DTO 분리, 메시지/이벤트 카탈로그, AUTH 정책, 업로드 한도 동기화, 네비 방식 고정, 비교표 규격, Makefile/pre-commit, 아티팩트 저장 순서)
+**문서 버전:** 0.4
+**최근 갱신:** 2026-04-23 (0.4 추가: §9 전처리 고도화 계획 수립 — FR-055~058, PreprocessingConfig + datetime/bool/고카디널리티 + class_weight/SMOTE + 피처 변환 미리보기. 0.3 기준 유지: DTO 분리, 메시지/이벤트 카탈로그, AUTH 정책, 업로드 한도 동기화, 네비 방식 고정, 비교표 규격, Makefile/pre-commit, 아티팩트 저장 순서)
 
 **참조 문서:**
 - 요구사항: [`AutoML_Streamlit_MVP.md`](./AutoML_Streamlit_MVP.md)
@@ -615,9 +615,49 @@ with session_scope() as session:
 - `tests/ui/test_admin_page.py` 6건 추가 (1건 `@pytest.mark.slow` — 실제 학습 이력 테이블 검증)
 - `pytest` 288 passed (기존 273 + 신규 15), `ruff check` / `black` 통과, Streamlit smoke 8 페이지 (`/`, `/01~/07`) 모두 200
 
+### 6.8 인앱 매뉴얼 (FR-100 신설, 2026-04-21)
+
+릴리즈 이후 사용자 온보딩 / 트러블슈팅 경험을 개선하기 위해 "앱 안에서 바로 보는
+매뉴얼" 기능을 추가한다. 요구사항 문서 원본에는 없었으나, 운영 중 빈도가 높은
+"어디서 뭘 하는가 / 에러가 났는데 어디를 봐야 하는가" 질문에 직접 응답하기 위해
+FR-100 으로 편입.
+
+**설계 결정**
+
+- **배치**: 하이브리드. (a) 각 페이지 상단 `❓ 이 페이지 도움말` expander + (b) 전체 매뉴얼 허브 페이지(`pages/00_manual.py`, 사이드바 네비 "매뉴얼").
+- **콘텐츠 저장**: `docs/manual/*.md` 단일 출처(SSOT). 코드가 아닌 텍스트만 수정해 빠른 반영 가능.
+- **깊이**: 페이지 목적 · 주요 버튼/옵션 · 주의사항 · 연결 파일/FR · 자주 겪는 오류 (깊이2 수준).
+- **대상**: 👤 사용자 섹션 + 🛠 개발자 섹션을 같은 MD 안에 공존. 기능별 접근 시 동일 문서에서 맥락 연결.
+
+**체크리스트**
+
+- [x] `pages/components/help.py` — `render_help(key)` expander 렌더 + `render_manual_section(key, anchor=)` + `list_manual_keys()` + `load_manual(key)` (mtime 기반 캐시, 트래버설 차단)
+- [x] `docs/manual/` — `00_overview`, `01_projects` ~ `07_admin`, `troubleshooting`, 내부 `_hub_intro` 총 10 개 MD (깊이2 초안 완결)
+- [x] `pages/00_manual.py` — 허브 페이지. 검색창(부분일치/대소문자무시) 으로 섹션 필터, TOC 2 컬럼 레이아웃. DB 없이도 열람 가능.
+- [x] `pages/components/layout.py` — `NAV_ITEMS` 에 "매뉴얼" 엔트리 + 사이드바 `📘 매뉴얼 열기` 버튼 → `st.switch_page`.
+- [x] `app.py` 홈 CTA — "문서 보기" → "📘 매뉴얼 보기" 로 변경, 허브 페이지로 `switch_page`.
+- [x] 기능 페이지 01~07 상단에 `render_help("<page_key>")` 한 줄씩 삽입.
+- [x] `tests/ui/test_help.py` — 9건 (로더 단위, 경로 트래버설 방어, mtime 캐시 무효화, 허브 렌더, 검색 필터, 기능 페이지 expander 노출).
+- [x] `tests/docs/test_manual_files.py` — 19건 (필수 키 존재 / 최소 길이 / 사용자·개발자 섹션 보장 / libomp·seed 트러블슈팅 포함 / 미등록 파일 알람).
+
+**수용 기준**
+
+- 사이드바에서 "매뉴얼" 로 진입 → 10 개 섹션이 TOC + 본문 모두 렌더된다.
+- 기능 페이지 어디서나 `❓ 이 페이지 도움말` 박스가 보이고, 내용이 해당 페이지 용도에 부합한다.
+- 검색어 "libomp" 입력 시 트러블슈팅 섹션만 남는다.
+- 매뉴얼 MD 를 수정하면 Streamlit 재실행 없이(동일 세션 next-rerun) 변경 내용이 반영된다.
+
+**진행 로그 (2026-04-21)**
+
+- 브랜치: `feature/in-app-manual` — 매뉴얼 기능만 격리.
+- MD 콘텐츠는 AutoML_Streamlit_MVP.md (FR 매핑) · ARCHITECTURE.md (파일 경로) · README.md (트러블슈팅) 를 재구성해 사용자/개발자 양쪽 모두에게 한 화면으로 제공.
+- `pytest tests/docs/ tests/ui/test_help.py` → 28 passed. 기능 페이지 전체 회귀는 하단 §8 체크.
+- 향후 §8.x (배포) 시 정적 사이트 빌드가 필요하면 동일 MD 를 MkDocs/Docusaurus 로 재활용 가능하도록 파일 구조를 설계 (코드 의존 없음).
+
 **수용 기준 (단계 6 전체)**
 - `AutoML_Streamlit_MVP.md` §13.1의 모든 필수 수용 조건 ✅
 - 분류/회귀 샘플 E2E 시나리오 각 1회 성공
+- §6.8 인앱 매뉴얼 FR-100 ✅ (2026-04-21)
 
 ---
 
@@ -737,6 +777,176 @@ with session_scope() as session:
 
 ---
 
+## 단계 9. 전처리 고도화 (FR-055~058)
+
+> **릴리즈 타깃**: `v0.2.0` (MVP 이후 첫 기능 이터레이션).
+> **범위 고정**: L1 (전략 선택) + L2 (datetime/bool/고카디널리티) + L5 (class_weight + SMOTE) + L6 (피처 변환 미리보기).
+> **제외 (후속 이터레이션)**: Target encoding(L3), PolynomialFeatures/상호작용(L3), 상관/분산 기반 피처 선택(L4), 전처리 프리셋 저장(L6 심화). §9.11 에 후속 항목으로 등록.
+>
+> **하위호환 원칙**: `PreprocessingConfig` 의 모든 필드에 현재 동작(수치: median→standard / 범주: most_frequent→onehot / 불균형: none / 파생: off) 과 동일한 기본값을 부여한다. §3~§7 의 기존 테스트 300건은 코드 변경 후에도 무수정 통과해야 한다.
+
+### 9.0 설계 결정 (고정)
+
+- [ ] `PreprocessingConfig` 는 `ml/schemas.py` 에 `@dataclass(frozen=True, slots=True)` 로 추가. `TrainingConfig.preprocessing: PreprocessingConfig | None = None` 으로 주입 경로 일원화.
+- [ ] 전처리 파이프라인은 **여전히 단일 `sklearn.Pipeline` / `ColumnTransformer`** 구조를 유지 (`.cursor/rules/ml-engine.mdc` §전처리). `imbalanced-learn` 의 SMOTE 는 파이프라인 밖 또는 `imblearn.pipeline.Pipeline` 로 분리해 평가 누수 방지.
+- [ ] 신규 모듈:
+  - `ml/type_inference.py` — datetime / bool / 고카디널리티 감지 (순수 pandas)
+  - `ml/feature_engineering.py` — datetime 분해, bool 정규화 (순수 pandas / sklearn transformer)
+  - `ml/balancing.py` — SMOTE / class_weight 라우팅 헬퍼 (`imblearn` 가드 포함, 미설치면 `none` 강제)
+- [ ] 아티팩트 확장: `<model_dir>/preprocessing_config.json` 추가 (4 → 5 파일 레이아웃). `preprocessor.joblib` 과 **같은 트랜잭션**에서 저장되어야 하며, 로드 시 한쪽만 존재하면 `StorageError`.
+- [ ] UI: `pages/03_training.py` 안 `st.expander("고급 전처리 (선택)", expanded=False)`. 모든 위젯은 기본값 = 하위호환 값.
+- [ ] 의존성 추가: `imbalanced-learn>=0.12` (extras 가 아닌 메인 requirements). 미설치 환경에서는 SMOTE 옵션이 disabled 로 표시되고 `none/class_weight` 는 정상 동작해야 한다.
+
+### 9.1 스키마 (`ml/schemas.py`) — FR-055
+
+- [x] 전략 Literal 정의:
+  - `ImputeNumericStrategy = Literal["median","mean","most_frequent","constant_zero","drop_rows"]`
+  - `ImputeCategoricalStrategy = Literal["most_frequent","constant_missing"]`
+  - `ScaleStrategy = Literal["standard","minmax","robust","none"]`
+  - `OutlierStrategy = Literal["none","iqr_clip","winsorize"]`
+  - `CategoricalEncoding = Literal["onehot","ordinal","frequency"]`
+  - `ImbalanceStrategy = Literal["none","class_weight","smote"]`
+  - 추가: `DatetimePart = Literal["year","month","day","weekday","hour","is_weekend"]`
+- [x] `@dataclass(frozen=True, slots=True) class PreprocessingConfig`:
+  - [x] 필드: `numeric_impute`, `numeric_scale`, `outlier`, `outlier_iqr_k: float = 1.5`, `winsorize_p: float = 0.01`, `categorical_impute`, `categorical_encoding`, `highcard_threshold: int = 50`, `highcard_auto_downgrade: bool = True`, `datetime_decompose: bool = False`, `datetime_parts: tuple[DatetimePart, ...] = ()`, `bool_as_numeric: bool = True`, `imbalance: ImbalanceStrategy = "none"`, `smote_k_neighbors: int = 5`
+  - [x] `__post_init__`: 값 범위 검증 (iqr_k>0, 0<p<0.5, k_neighbors≥1, highcard_threshold≥2), `datetime_decompose=True` 에서 parts 비어 있으면 ValueError. 회귀+SMOTE 크로스 검증은 `TrainingConfig.__post_init__` 으로 이관 (task 미의존 원칙).
+  - [x] `to_dict()` / `from_dict()` — 아티팩트 직렬화 (누락 키 기본값 복원, 미지정 키 조용히 무시)
+  - [x] `is_default` 속성 + `summary()` 헬퍼 — 기본값 조합 여부 (run_log 기록 분기용)
+- [x] `TrainingConfig` 에 `preprocessing: PreprocessingConfig | None = None` 필드 추가. `None` 이면 내부에서 `PreprocessingConfig()` 기본 인스턴스 사용. 회귀 + `imbalance="smote"` 조합은 `ValueError` 로 거부.
+- [x] `FeatureSchema` 확장:
+  - [x] `datetime: tuple[str, ...] = ()` (원본 datetime 컬럼 이름)
+  - [x] `derived: tuple[DerivedFeature, ...] = ()` (신규 `DerivedFeature(name, source, kind)` dataclass, frozen/slots)
+  - [x] `to_dict/from_dict` 확장, 기존 직렬화와 하위호환 (누락 필드는 빈 tuple로 복원)
+
+### 9.2 타입 추론 강화 (`ml/type_inference.py`) — FR-056
+
+- [x] `detect_datetime_columns(df) -> list[str]` — `is_datetime64_any_dtype` + object 컬럼은 `pd.to_datetime(..., errors="coerce")` 성공률 ≥95% (`DATETIME_PARSE_SUCCESS_RATIO`) 기준. 수치 문자열(“1”,”42”) 위주 object 컬럼은 to_datetime unit 오인 방지 차원에서 제외.
+- [x] `detect_bool_columns(df) -> list[str]` — `is_bool_dtype` / int 고유값 ⊆ {0,1} / object 고유값(lower-stripped) ⊆ {"true","false","t","f","yes","no","y","n","0","1"} 토큰 집합. NaN 이 섞인 int 0/1 은 float 로 승격되어 제외되는 경계도 테스트로 고정.
+- [x] `detect_highcard_categorical(df, cols, *, nunique_threshold=50, unique_ratio_threshold=0.3) -> list[str]` — nunique 축 **또는** unique_ratio 축(행수≥2) 어느 하나라도 임계 초과 시 선정. 존재하지 않는 컬럼은 조용히 스킵.
+- [x] `skew_report(df, num_cols, *, abs_skew_threshold=1.0) -> dict[str, float]` — L3 후속 작업용 디폴트 off 유틸. 비수치/상수/NaN-skew 컬럼은 스킵, 소수 6자리 반올림. 기본 off — 호출 측에서 원할 때만 사용.
+- [x] 단위 테스트 `tests/ml/test_type_inference.py` **19건** (DATETIME/BOOL/HIGHCARD/SKEW 4축):
+  - [x] datetime 자동 감지 (datetime64 / ISO 문자열 / 부분 실패 95% 경계 / 수치 문자열 배제 / 전체 NaN 스킵 / 행=0 datetime64 dtype 보존)
+  - [x] bool 감지 (네이티브 bool / int 0-1 / NaN 섞인 float 제외 / Y-N·yes-no·true-false 토큰 / 혼합 토큰 거부 / 전체 NaN 스킵)
+  - [x] 고카디널리티 감지 (nunique 축 / unique_ratio 축 / 존재X 컬럼 스킵 / 빈 cols iter)
+  - [x] skew_report (우측 치우침 / 상수+비수치 스킵 / 대칭 분포 미포함 / 반올림 6자리)
+
+### 9.3 전처리 파이프라인 확장 (`ml/preprocess.py`) — FR-055, FR-056
+
+- [x] 기존 `build_preprocessor(num_cols, cat_cols)` 시그니처 유지 + 오버로드 추가: `build_preprocessor(num_cols, cat_cols, *, config: PreprocessingConfig | None = None, df_sample: pd.DataFrame | None = None, datetime_cols=(), bool_cols=())`
+  - [x] `config=None` 이면 기존 동작 = 테스트 회귀 0 (`_build_preprocessor_default` 로 분리, 기존 15건 무수정 통과)
+  - [x] 내부 빌더 팩토리: `_build_numeric_pipeline(config)`, `_build_categorical_pipeline_for_encoding(config, encoding)` (+ `_make_cat_transformers` 그룹핑 헬퍼), `_build_datetime_pipeline(config)` (§9.4 의 `DatetimeDecomposer` 미구현 시 `NotImplementedError`), `_build_bool_passthrough()` (sklearn `"passthrough"` 반환)
+- [x] 이상치 처리: `IQRClipper(k)` / `Winsorizer(p)` 를 `sklearn.base.BaseEstimator` + `TransformerMixin` 로 직접 구현. `fit` 시 분위수 저장, `transform` 시 `np.clip`. NaN 은 통과(후단 imputer 가 처리). sklearn `clone` 자동 지원 (별도 `__sklearn_clone__` 불필요 — `__init__` 하이퍼만 저장)
+- [x] 고카디널리티 자동 라우팅: `plan_categorical_routing(df_sample, cat_cols, config)` 헬퍼로 분리. `categorical_encoding="onehot"` + `highcard_auto_downgrade=True` 이면 `nunique > highcard_threshold` 컬럼을 `frequency` 로 강등, `PreprocessingRouteReport.auto_downgraded` 에 기록. 반환 ColumnTransformer 의 `_route_report_` 속성으로 UI 노출 가능.
+- [x] `split_feature_types` 확장:
+  - [x] `split_feature_types_v2(df, target, excluded) -> (num, cat, dt, bool)` 4-tuple 신설 (native dtype 기준: `is_datetime64_any_dtype` / `is_bool_dtype`). 기존 `split_feature_types` 는 무수정 유지.
+- [x] `build_feature_schema` 확장: `datetime_cols` / `bool_cols` / `config` / `route_report` kwargs 추가. `_enumerate_derived_features` 가 encoding(onehot→컬럼별 카테고리, ordinal/frequency→단일) / datetime_parts / bool_as_numeric 규칙에 따라 `DerivedFeature` 리스트를 산출. `config=None` 기본 경로는 `derived=()`, `datetime=()` 로 기존 동작 유지.
+- [x] `FrequencyEncoder` (§9.3 부가): sklearn `BaseEstimator+TransformerMixin` 으로 직접 구현, 학습 빈도 비율(0~1) 매핑, unseen 범주 → 0.0.
+- [x] 범주형 파이프라인에 `FunctionTransformer(_coerce_to_object)` 선행 (bool→object 승격) — `bool_as_numeric=False` 경로에서 SimpleImputer 가 bool dtype 을 거부하지 않게.
+- [x] 테스트: `tests/ml/test_preprocess.py` 에 §9.3 전용 클래스 6개(`TestSplitFeatureTypesV2`, `TestIQRClipper`, `TestWinsorizer`, `TestFrequencyEncoder`, `TestBuildPreprocessorConfig`, `TestPlanCategoricalRouting`, `TestBuildFeatureSchemaExtended`) / 신규 26건 추가 — **총 41/41 통과, 기존 15건 무수정 통과**, `ml/preprocess.py` 커버리지 97%.
+
+### 9.4 피처 공학 (`ml/feature_engineering.py`) — FR-056
+
+- [x] `DatetimeDecomposer(parts: tuple[str, ...])` transformer (`ml/feature_engineering.py`, sklearn `BaseEstimator + TransformerMixin`)
+  - [x] `fit` 은 입력 컬럼명만 `feature_names_in_` / `n_features_in_` 로 기억, `transform` 은 각 입력 datetime 컬럼에 대해 요청된 part 수만큼 float 열을 생성 (지원: `year`, `month`, `day`, `weekday`, `hour`, `is_weekend`; pandas weekday 0=Mon, is_weekend={5,6}). 출력 순서는 입력 컬럼 우선 (`col_part1, col_part2, ...`). `pd.to_datetime(errors="coerce")` 로 문자열도 파싱.
+  - [x] NaT → NaN 으로 전파, 후단 `SimpleImputer(strategy="median")` 가 대치 (§9.3 `_build_datetime_pipeline` 에서 이미 결합). `get_feature_names_out(input_features)` 도 제공 → `<col>_<part>` 이름 생성.
+  - [x] `parts=()` / unknown part → `ValueError` (Literal 외 방어). sklearn `clone` 자동 지원.
+- [x] `BoolToNumeric` transformer — bool dtype(→ float) / 수치형(0·1 유지, 그 외 NaN) / object 토큰(`true/t/yes/y/1` → 1.0, `false/f/no/n/0` → 0.0, 소문자·strip 비교, 미지정 토큰 → NaN). `true_tokens` / `false_tokens` 겹침 시 `ValueError`. `get_feature_names_out` 제공.
+- [x] (후속 이월) `LogTransformer`, `YeoJohnsonTransformer` 는 §9.11 L931 에 이미 기록 — 이번 스프린트 구현하지 않음.
+- [x] 단위 테스트 `tests/ml/test_feature_engineering.py` **26건** (Datetime 13 / Bool 13): year·month·day·weekday·is_weekend·hour 추출 / NaT→NaN / 문자열 coerce 파싱 / 다중 컬럼 출력 순서 / `get_feature_names_out` / 잘못된 part·empty part → `ValueError` / sklearn `clone` 보존 / SimpleImputer 후단 결합 end-to-end. Bool 측: 네이티브 bool / int {0,1} / int 도메인 밖 → NaN / `yes/no/Yes/ NO `·대소문자·공백 / `true/false/T/F` / unknown 토큰 → NaN / NaN 전파 / 다중 컬럼 / 커스텀 토큰 오버라이드 / 토큰 겹침 rejection / sklearn `clone` / get_feature_names_out / 파이프라인 imputer 결합.
+- [x] §9.3 통합: `_build_datetime_pipeline` 의 `NotImplementedError` 가드가 자동 해제됨. `tests/ml/test_preprocess.py` 에 `test_datetime_decompose_true_integrates_with_feature_engineering` 추가 — `datetime_decompose=True` 경로가 end-to-end 로 동작 (num 1 + decompose 2 parts = 3 컬럼, NaN 0). 기존 `test_datetime_decompose_true_guarded_without_feature_engineering` 는 구현 존재 분기로 자동 전환되어 계속 통과.
+
+### 9.5 불균형 대응 (`ml/balancing.py`) — FR-057
+
+- [x] `apply_imbalance_strategy(estimator, X_train, y_train, config, *, task_type="classification") -> (estimator, X_train, y_train)` — `ml/balancing.py` 신설
+  - [x] `"none"` → passthrough (입력 객체 그대로 반환)
+  - [x] `"class_weight"` → `_apply_class_weight` 가 `estimator.set_params(class_weight="balanced")` 시도. sklearn 이 미지원 시 `ValueError`/`TypeError` → `logger.warning("class_weight 를 지원하지 않는...")` 후 passthrough.
+  - [x] `"smote"` → `_apply_smote` 가 `imblearn.over_sampling.SMOTE(k_neighbors=config.smote_k_neighbors, random_state=settings.RANDOM_SEED).fit_resample(X_train, y_train)`. 완료 후 `n_before/n_after/k_neighbors` info 로그.
+  - [x] **test 세트에는 호출 금지** — docstring 에 명시, §9.6 호출자(`trainers.train_all`) 가 train_split 이후에만 전달하도록 책임 이전.
+- [x] `imblearn` 미설치 가드: 모듈 import 시 try/except 로 `SMOTE_AVAILABLE: bool` 플래그 세팅. `smote` 요청인데 `False` → `MLTrainingError("imbalanced-learn 패키지가 필요합니다...")`. 회귀 + SMOTE 조합도 defense-in-depth 로 `MLTrainingError("회귀(regression) 작업에는 SMOTE 를 적용할 수 없습니다.")` (primary guard 는 `TrainingConfig.__post_init__`).
+- [x] `requirements.txt` 에 `imbalanced-learn>=0.12,<1.0  # §9.5 SMOTE (FR-057)` 추가, 실측 설치 버전 `0.14.1` + `sklearn-compat-0.1.5`.
+- [x] 단위 테스트 `tests/ml/test_balancing.py` **8건** (≥6 초과 달성): TestNoneStrategy(1) / TestClassWeightStrategy(2: 지원 estimator=LogisticRegression / 미지원 KNN → logger.warning 가로채 검증, automl 로거 `propagate=False` 특성 고려) / TestSmoteStrategy(4: 소수 클래스 리밸런스 검증(`counts[0]==counts[1]`, rows 증가) / `smote_k_neighbors` + `settings.RANDOM_SEED` 가 sampler 생성자에 전달되는지 fake SMOTE 로 확인 / 회귀 task_type → `MLTrainingError("회귀")` / monkeypatch `SMOTE_AVAILABLE=False` → `MLTrainingError("imbalanced-learn")`) / TestUnknownStrategy(1: frozen 우회 후 `"bogus"` 전략 → `ValueError`). `ml/balancing.py` 커버리지 **95%** (41 stmts / 2 miss — 미설치 경로).
+
+### 9.6 학습 파이프라인 통합 (`ml/trainers.py`, `ml/evaluators.py`)
+
+- [x] `train_all(specs, X_train, y_train, *, preprocess_cfg: PreprocessingConfig | None = None, balancer=None)` 시그니처 확장
+  - [x] balancer 는 §9.5 의 `apply_imbalance_strategy` 호출 결과를 받아 fit 직전에 적용
+  - [x] 기존 호출자(테스트 포함) 는 인자 생략 시 현재 동작 유지
+- [x] 아티팩트 저장 (§3.7 / §4.3a 와 결합):
+  - [x] `save_model_bundle(...)` 에 `preprocessing_config: PreprocessingConfig | None = None` 인자 추가
+  - [x] 존재 시 `preprocessing_config.json` 를 번들 디렉터리에 저장. `load_model_bundle` 은 파일 없을 경우 `PreprocessingConfig()` 기본값으로 복원 (구 모델 하위호환).
+- [x] `ModelBundle` dataclass 에 `preprocessing: PreprocessingConfig` 필드 추가 (기본값으로 역호환)
+
+### 9.7 Service 계층 통합 (`services/training_service.py`)
+
+- [x] `run_training(config: TrainingConfig, on_progress=None)` 내부에서:
+  - [x] `config.preprocessing` 를 ml 레이어로 forward
+  - [x] `run_log` 에 `"preprocessing: <summary>"` 1행 append (`is_default` 이면 `"preprocessing: default"`, 아니면 변경된 축만 나열)
+  - [x] 진행 콜백 stage 에 `"feature_engineering"` 추가 (`preprocessing` → `feature_engineering` → `split` → `balance` → `train:<algo>` → ...)
+- [x] `services/dto.py`:
+  - [x] `PreprocessingConfigDTO` + `from_config(PreprocessingConfig)` / `to_config()`
+  - [x] `FeaturePreviewDTO` (§9.9 UI 소비용) — `n_cols_in`, `n_cols_out`, `derived: tuple[tuple[str,str,str], ...]` (source, name, kind), `encoding_summary: dict[str, str]`, `auto_downgraded: tuple[str, ...]`
+- [x] 신규 서비스 함수: `services/training_service.preview_preprocessing(dataset_id, config: TrainingConfig) -> FeaturePreviewDTO`
+  - [x] 실제 fit 없이 메타데이터 기반 추정 (onehot 차원은 `df[cat_col].nunique()` + 고카디널리티 라우팅 반영)
+  - [x] 5만 행 기준 < 2초 (NFR-003)
+
+### 9.8 아티팩트 / 감사 / 하위호환
+
+- [x] `<model_dir>/preprocessing_config.json` 저장/로드 왕복 테스트 1건
+- [x] 기존 모델 (v0.1.0 에서 학습된 아티팩트) 로드 시 `preprocessing_config.json` 없음 → 기본값으로 복원 + `log_event("model.legacy_preprocessing_loaded")` 1회 경고
+- [x] `AuditLog` action_type 에 `training.preprocessing_customized` 추가 (`is_default=False` 인 학습 시점에 1회) → `utils/events.py::Event` 상수
+
+### 9.9 UI — `pages/03_training.py` (FR-055~058)
+
+- [x] `st.expander("고급 전처리 (선택)", expanded=False)` 내부 위젯 배치:
+  - [x] **결측/스케일/이상치**: 3 selectbox + `iqr_k` / `winsorize_p` number_input (조건부 노출)
+  - [x] **범주**: 결측·인코딩 selectbox + "고카디널리티 자동 감지" 체크박스(기본 on) + 임계 숫자 입력
+  - [x] **고급 타입**: datetime 자동 감지 목록 표시 + 분해 체크박스(off 디폴트) + 분해할 파트 multiselect
+  - [x] **불균형 대응** (분류일 때만): `none` / `class_weight` / `smote` 라디오 + `smote_k_neighbors` number_input (조건부), imblearn 미설치 시 `smote` 옵션 disabled
+- [x] **피처 변환 미리보기 카드 (FR-058)**:
+  - [x] expander 하단에 `st.button("미리보기")` → `training_service.preview_preprocessing(...)` 호출
+  - [x] 결과: `st.metric("원본 열", n_cols_in)` / `st.metric("변환 후 열", n_cols_out)`
+  - [x] 테이블: `source | kind | derived_name` 목록
+  - [x] 자동 다운그레이드 컬럼은 `st.info` 로 1회 고지
+- [x] 설정 위젯 변경은 즉시 rerun 되며, `PreprocessingConfig.is_default` 가 아닌 경우 "⚙️ 커스텀 전처리" 뱃지 노출
+- [x] UI 테스트 `tests/ui/test_training_page_advanced.py` ≥ 8건:
+  - [x] 기본 진입 시 expander 접혀 있음, 모든 값 = 하위호환
+  - [x] 스케일 `robust` 선택 후 실행 → TrainingJob.run_log 에 `"scale=robust"` 포함 (@slow)
+  - [x] 회귀 + SMOTE 선택 → 검증 에러 flash
+  - [x] imblearn 미설치 모킹 → SMOTE 옵션 disabled
+  - [x] 미리보기 버튼 → `FeaturePreviewDTO` 렌더 (n_cols_out > n_cols_in 케이스)
+
+### 9.10 문서 · 품질 · 계획
+
+- [x] `ARCHITECTURE.md` §6 (ML 엔진) 갱신 — 전처리 레이어 구성도 + 아티팩트 5파일 레이아웃 반영
+- [x] `.cursor/rules/ml-engine.mdc` — `PreprocessingConfig` 주입 규약 1~2 문단 추가
+- [x] `README.md` "빠른 시작" 하단에 "고급 전처리" 항목 1단락
+- [x] 새 파일 범위 `ruff check` / `mypy` / `black` 0 에러
+- [x] `pytest --cov=ml --cov=services` 커버리지 `fail_under=60` 유지 (신규 코드는 80% 이상 목표)
+- [x] `make ci` 통과
+- [x] `scripts/init_db.py --drop` 재현성 영향 없음 확인 (스키마 변경 없음)
+- [x] 계획서 §9 체크박스 + 진행 로그 append + `make plan-check` in-progress=0
+
+### 9.11 후속 범위 (이번 이터레이션 제외, 기록만)
+
+추적 유지를 위해 **구현하지 않지만 잊지 않는다**. 우선순위 제안 순서대로 나열.
+
+- [ ] **Target encoding (L3)** — 회귀 및 이진 분류용. out-of-fold KFold 로 누수 방지 구현 필요. `ml/feature_engineering.py::OutOfFoldTargetEncoder`
+- [ ] **수치 변환 (L3)** — `log1p` / `sqrt` / `yeo-johnson` + skew 자동 감지 기반 추천. `skew_report` (§9.2) 는 이번에 미리 배치해 둠.
+- [ ] **PolynomialFeatures / 상호작용 (L3)** — `degree=2, interaction_only=True` + `VarianceThreshold`
+- [ ] **피처 선택 (L4)** — 분산 필터(`VarianceThreshold`), 상관 필터(|r|>0.95), 후방 중요도 기반 drop
+- [ ] **프리셋 저장/공유 (L6 심화)** — `Project.preprocessing_preset_json` 컬럼 추가, "내 전처리 프리셋" 불러오기 UI
+
+---
+
+**수용 기준 (단계 9 전체)**
+- `AutoML_Streamlit_MVP.md` FR-055 ~ FR-058 이 전부 UI 에서 실행 가능
+- 기본값으로 학습 시 §3~§7 기존 테스트 300건 무수정 통과
+- 커스텀 설정으로 학습 시 아티팩트에 `preprocessing_config.json` 이 생성되고 재로드 · 예측까지 정상
+- 회귀 + SMOTE 조합은 명확한 에러 메시지로 차단
+- imblearn 미설치 환경에서 앱이 기동되며 SMOTE 만 disabled 로 노출
+
+---
+
 ## 부록 A. FR → 파일 매핑 치트시트
 
 | FR | 주요 파일 | 단계 |
@@ -746,7 +956,8 @@ with session_scope() as session:
 | FR-020~024 프로젝트 | `services/project_service.py`, `services/dto.py`, `pages/01_projects.py` | 3, 4, 6 |
 | FR-030~035 데이터셋 | `services/dataset_service.py`, `services/dto.py`, `utils/file_utils.py`, `pages/02_dataset_upload.py` | 1, 3, 4, 6 |
 | FR-040~045 학습 설정 | `ml/schemas.py`, `services/training_service.py`, `pages/03_training.py` | 3, 4, 6 |
-| FR-050~054 전처리 | `ml/preprocess.py`, `ml/profiling.py` | 3 |
+| FR-050~054 전처리 (기본) | `ml/preprocess.py`, `ml/profiling.py` | 3 |
+| FR-055~058 고급 전처리 | `ml/schemas.py` (PreprocessingConfig), `ml/preprocess.py`, `ml/type_inference.py`, `ml/feature_engineering.py`, `ml/balancing.py`, `services/training_service.py` (preview_preprocessing), `pages/03_training.py` (고급 전처리 expander) | 9 |
 | FR-060~066 학습 | `ml/trainers.py`, `ml/evaluators.py`, `ml/registry.py`, `services/training_service.py` (아티팩트 저장 순서: 4.3a) | 3, 4 |
 | FR-070~075 결과/모델 | `ml/artifacts.py`, `services/model_service.py`, `services/dto.py`, `pages/04_results.py`, `pages/05_models.py` | 3, 4, 6 |
 | FR-080~085 예측 | `services/prediction_service.py`, `pages/06_predict.py` | 4, 6 |
@@ -816,6 +1027,7 @@ with session_scope() as session:
 | 2026-04-17 | 0.1 | 초안 작성 (단계 0~8, 부록 A/B) |
 | 2026-04-17 | 0.2 | 계획서 유지 규칙 / Definition of Done / 샘플 데이터(0.3) / 리스크 레지스터 추가 |
 | 2026-04-17 | 0.3 | **added**: 0.2a(네비 방식 고정), 0.2b(config.toml 동기화), 1.7(messages/events 카탈로그), 2.2a(AUTH 정책), 3.1a/b(DTO 분리), 4.3a(아티팩트 저장 순서), Makefile/pre-commit 훅, 6.4 비교표 규격 |
+| 2026-04-23 | 0.4 | **added**: §9 전처리 고도화 (FR-055~058) 계획 수립. L1(전략 선택)+L2(datetime/bool/고카디널리티)+L5(class_weight+SMOTE)+L6(피처 변환 미리보기) 범위 확정. 후속 범위(§9.11)에 Target encoding / PolynomialFeatures / 피처 선택 / 프리셋 저장 기록. `AutoML_Streamlit_MVP.md` §6.6 에 FR-055~058, §3.1 포함범위에 '사용자 제어 전처리' 반영. 부록 A 에 FR-055~058 매핑 추가. |
 
 ---
 
@@ -874,6 +1086,18 @@ with session_scope() as session:
 - 2026-04-20 | 단계 6.3 | completed | `pages/03_training.py` 신설 + `services/dataset_service.suggest_excluded_columns` 추가 + `ml.profiling.ID_UNIQUE_RATIO_THRESHOLD` public 승격. 페이지 구성: **데이터 확인 섹션**(`render_profile` 재사용, `st.expander` 기본 collapsed) / **데이터셋 피커**(`selectbox` 라벨 `"[id] filename — rows × cols"`, 선택 즉시 `SessionKey.CURRENT_DATASET_ID` 동기화) / **설정 폼**(task_type 라디오 → metric 옵션이 분류/회귀 튜플로 자동 전환, target selectbox, excluded multiselect 는 `suggest_excluded_columns(threshold=0.95)` 를 기본값으로 주입하되 target 컬럼은 후보에서 배제, test_size slider(0.05~0.5), metric selectbox 에 `METRIC_DIRECTIONS` 기반 ↑/↓ help, job_name text_input — 공백만이면 None) / **실행**(폼 제출 → `TrainingConfig` 조립 → `st.status("학습 진행 중...", expanded=True)` 안에서 `training_service.run_training(on_progress=...)` 호출, 콜백은 `progress_bar.progress(ratio, text=stage)` + 최근 6단계 caption 로그) / **완료 처리**(성공 → `status.update(state="complete")` + `SessionKey.LAST_TRAINING_JOB_ID` 세팅 + flash success + 3-metric 카드 + 베스트 배지 + 실패건 expander, 실패 → `status.update(state="error")` + flash error. 결과 페이지(§6.4) CTA 는 `st.switch_page` 시도 후 `StreamlitAPIException` 시 info flash 로 폴백). **세션 stale 보정**: `CURRENT_DATASET_ID` 가 프로젝트의 현재 datasets 리스트에 없으면 렌더 전에 제거. 결정 기록: `st.form` 대신 **개별 위젯 + 하단 실행 버튼** — task_type 변경 시 metric 옵션이 즉시 갱신돼야 하기 때문. Streamlit 위젯 상태 보존 특성상 target 을 런타임에 바꿔도 excluded 기본값은 초회 렌더 시점 고정 (UX 문서화, 테스트도 이에 맞춰 초회 렌더만 검증). tests: `tests/services/test_dataset_service.py` +3건(식별자 힌트 / 임계값 튜닝 / 없는 데이터셋 NotFoundError), `tests/ui/test_training_page.py` 9건 (DB 가드 / 프로젝트 가드 / 데이터셋 없음 가드 / 분류 폼 기본값 / 회귀 전환 후 metric 옵션 / 식별자 컬럼 기본 제외 / [slow] 분류 happy path(`run_training` 실행 후 `LAST_TRAINING_JOB_ID` 세팅 & 요약 메트릭 렌더) / [slow] 회귀 happy path / monkeypatch 로 Service 예외 주입 시 error flash 노출 + LAST_TRAINING_JOB_ID 미세팅). 전체 pytest **242건 green**, ruff/black clean, streamlit smoke (`/`, `/01_projects`, `/02_dataset_upload`, `/03_training`) 모두 HTTP 200, `make plan-check` in-progress=0.
 - 2026-04-20 | 단계 6.2 | completed | `pages/02_dataset_upload.py` + `pages/components/data_preview.py` 신설. 구성: **업로드 폼**(`st.form(clear_on_submit=True)` + `ALLOWED_EXTENSIONS`, 빈 파일 제출 → `warning` flash / ValidationError → error flash / 성공 시 `SessionKey.CURRENT_DATASET_ID` 자동 세팅) / **프리뷰 섹션**(`st.tabs([샘플 데이터, 컬럼 프로파일])` — 샘플 탭은 `render_preview` 로 최대 50행 테이블 + `caption` 표시, 프로파일 탭은 `render_profile` 로 행/컬럼 메트릭 2개 + 컬럼별 통계 테이블(`결측`, `결측비율`, `고유값`, `고유비율`)) / **목록**(행별 `st.container(border=True)` + `[선택][삭제]` 컬럼, 현재 선택 데이터셋은 ★ 마커 + select disabled) / **삭제 확인 플로우**(세션 플래그 `datasets_delete_target_id` 기반 인라인 컨펌 블록, cascade 경고 고정, 현재 선택 대상 삭제 시 `SessionKey.CURRENT_DATASET_ID` 자동 해제) / **stale 세션 정리**(목록에 없는 current_dataset_id 는 렌더 전에 제거). 결정: `st.dialog` 대신 §6.1 과 동일 패턴(세션 플래그 + 인라인)로 AppTest 친화 유지. 에러 플래시 UX 정합: 실패 경로 모두 `flash("error") + st.rerun()` 로 같은 사이클 안에서 `render_flashes` 가 소비. tests: `tests/ui/test_dataset_upload_page.py` 10건 (DB 가드 / 프로젝트 미선택 가드 / 목록 렌더 + 사이드바·서브헤더 노출 / 기본 select 미설정 검증 / 탭2+메트릭2 렌더 / 선택 버튼 상호작용 / 빈 파일 제출 warning / 삭제 성공 → DB·파일 제거 / 현재 선택 삭제 시 세션 해제 / 삭제 취소 / stale current_dataset_id 자동 제거). NFR-003 실측: 5만 행 12컬럼 CSV 기준 upload=0.15s / preview(50)=0.110s / profile=0.001s → **end-to-end 0.26s (목표 10s)**. 전체 pytest **230 green**, ruff/black clean, streamlit smoke (`/`, `/01_projects`, `/02_dataset_upload`) 모두 HTTP 200.
 - 2026-04-20 | 단계 6.1 | completed | `pages/01_projects.py` 신설. 구성: **생성 폼**(`st.expander` + `st.form`, 성공 시 자동 선택 + 사이드바 즉시 반영) / **목록**(행 별 `st.container(border=True)` + `[선택][수정][삭제]` 3버튼 컬럼, 현재 프로젝트는 ★ 마커 + 선택 버튼 disabled) / **수정 플로우**(세션 `projects_edit_target_id` 기반 인라인 `st.form` 노출, 저장 시 `project_service.update_project`) / **삭제 플로우**(세션 `projects_delete_target_id` 기반 인라인 컨펌 블록 + cascade 체크박스 — 기본값은 children 유무에 따라 결정, cascade=False 로 ValidationError 발생 시 컨펌 블록 유지 후 flash error 로 사용자 재시도 안내, 현재 선택 프로젝트 삭제 시 `SessionKey.CURRENT_PROJECT_ID` 자동 해제). 결정 기록: `st.dialog` 대신 세션 상태 기반 인라인 컨테이너 사용 — `streamlit.testing.v1.AppTest` 환경에서 dialog 내부 위젯 조작이 버전별로 불안정한 반면, 세션 플래그 + 인라인 렌더는 버튼 한 번으로 같은 UX 를 제공하고 테스트가 견고함. 에러 플래시 UX 정합화: 생성/수정/삭제 실패 시 `flash("error", ...)` 직후 `st.rerun()` 호출로 같은 사이클 안에서 `render_flashes` 가 소비하게 처리. tests: `tests/ui/test_projects_page.py` 12건 (DB 미초기화 가드 / 빈 목록 안내 / 생성 해피 + 자동 선택 + 사이드바 success / 이름 공백 ValidationError flash / 이름 중복 flash / 선택 버튼 상호작용 / 현재 프로젝트 row 마커 + select disabled / 수정 저장 + 취소 / 삭제 해피 / cascade 거부 → 1차 실패 + 2차 성공 왕복 / 현재 프로젝트 삭제 시 session 해제). 전체 pytest **220건 green**, ruff/black clean, `streamlit run app.py --server.headless true --server.port 8599` 로 `/` + `/01_projects` 각각 HTTP 200 smoke 확인.
+- 2026-04-23 | 단계 9 | note | §9 전처리 고도화 (FR-055~058) 스펙 수립. 범위: L1 전략 선택 / L2 datetime·bool·고카디널리티 / L5 class_weight+SMOTE / L6 피처 변환 미리보기. 후속 범위(§9.11): Target encoding / Polynomial / 피처 선택 / 프리셋 저장. `AutoML_Streamlit_MVP.md` §6.6 FR-055~058 추가, §3.1 포함범위에 '사용자 제어 전처리' 반영. `IMPLEMENTATION_PLAN.md` §9 (9.0~9.11) 블록 · 부록 A · 변경 이력 0.4 동기화. 구현은 별도 브랜치 (`feature/preprocessing-v2` 예정) 에서 착수 예정.
+- 2026-04-23 | 단계 9.1 | completed | `feature/preprocessing-v2` 브랜치 분기. `ml/schemas.py` 확장: 전략 Literal 6종 + `DatetimePart` / `DerivedFeature`(frozen/slots, kind=free-form + 권장값 docstring) / `PreprocessingConfig`(전 필드 기본값 = 현 MVP 동작, `__post_init__` 값·조합 검증, `is_default`·`summary()`·`to_dict/from_dict`(누락 키 기본값 복원)). `TrainingConfig` 에 `preprocessing: PreprocessingConfig \| None = None` 추가 + 회귀+SMOTE 크로스 검증 이관. `FeatureSchema` 에 `datetime`/`derived` 필드 추가 + `to_dict/from_dict` 하위호환 확장. 라이브러리 import(`sklearn`/`imblearn`) 도입하지 않음 — transformer 주입은 §9.3/§9.5 로 이관. tests/ml/test_schemas.py 17건 신규 (defaults=MVP 동치 / is_default / summary / iqr_k·winsorize_p·smote_k·highcard_threshold 검증 / datetime_decompose+parts / to-from dict 기본·커스텀·누락 키 / TrainingConfig preprocessing kwarg+None / 회귀+SMOTE 거부 / FeatureSchema 왕복 with datetime/derived / legacy dict 호환 / DerivedFeature frozen). 전체 pytest **351 passed**, ruff/black/mypy clean, `make ci` OK (coverage 93.98%, fail_under=60 충족). `make plan-check` → `OK: in-progress=0` 재확인.
+- 2026-04-23 | 단계 9.2 | completed | `ml/type_inference.py` 신설 — 순수 pandas 유틸 4종: `detect_datetime_columns`(datetime64 + object 컬럼 to_datetime 성공률 ≥95% / 수치 문자열 오인 방지용 numeric coerce ≥0.8 배제 / pandas 포맷 추정 UserWarning 억제) · `detect_bool_columns`(bool dtype / int{0,1} / object 토큰 소문자 비교 — `_BOOL_TOKENS` = {true,false,t,f,yes,no,y,n,0,1}, 혼합 토큰 거부) · `detect_highcard_categorical`(nunique 축 OR unique_ratio 축, 행수<2 일 때 ratio 축 비활성, 없는 컬럼 조용히 스킵) · `skew_report`(수치 아님/존재X/NaN-skew 스킵, threshold 기본 1.0, 6자리 반올림). `Iterable` 은 `TYPE_CHECKING` 블록으로 이동해 런타임 import 최소화. Streamlit/SQLAlchemy/sklearn/imblearn 의존 0건 유지 (ml/ 레이어 규약 준수). tests/ml/test_type_inference.py 19건 신규 — datetime(6) / bool(5) / highcard(4) / skew(4) 커버, 경계 시나리오 고정(95% parse 경계·numeric 문자열 배제·NaN 섞인 int 0-1 float 승격·행=0 datetime dtype 보존). 전체 pytest **370 passed** (기존 351 무수정 통과), `make ci` OK — `ml/type_inference.py` 커버리지 92%, 전체 93.83%, fail_under=60 충족. `make plan-check` → `OK: in-progress=0` 재확인.
+- 2026-04-23 | 단계 9.7 | completed | Service 계층 통합. **`services/dto.py` 확장**: `PreprocessingConfigDTO`(frozen/slots, 14 필드 평면화 — tuple→list, `from_config`/`to_config` 양방향 변환, `to_config` 는 ml 레이어 `PreprocessingConfig.__post_init__` 검증을 경유해 DTO 측 잘못된 조합은 `ValueError` 로 차단) + `FeaturePreviewDTO`(frozen/slots, `n_cols_in`/`n_cols_out`/`derived: tuple[tuple[str,str,str], ...]`/`encoding_summary: dict[str, str]`/`auto_downgraded: tuple[str, ...]`). **`services/training_service.py` 확장**: ① `_build_preprocessing` 에서 `config.preprocessing is None` 시 기존 legacy 경로(split_feature_types + build_preprocessor 인자 없이)를 유지해 기존 테스트 11건 무수정 통과 보장, 아니면 `split_feature_types_v2`(num/cat/datetime/bool 4-tuple) + `plan_categorical_routing`(auto_downgrade 반영) + `build_preprocessor(config=..., df_sample=..., datetime_cols=..., bool_cols=...)` + `build_feature_schema(datetime_cols=..., bool_cols=..., config=..., route_report=...)` 로 경로 분기. 반환값 마지막에 `PreprocessingRouteReport | None` 추가. ② `_make_balancer(pp_cfg, task_type) -> BalancerCallable | None` 헬퍼 — `imbalance="none"` 이면 None 반환(train_all 패스스루), 아니면 `apply_imbalance_strategy(estimator, X, y, pp_cfg, task_type)` 를 감싼 per-spec 클로저. **§9.5/§9.6 주의사항 준수**: balancer 호출자(run_training)가 `split_dataset` 이후의 `X_train/y_train` 만 train_all 에 전달하므로 테스트 세트 리샘플링이 원천 차단되는 흐름 docstring 명시. ③ `run_training` 본문: `_STAGE_RATIO` 에 `feature_engineering=0.07`·`balance=0.12` 키 추가. 전처리 완료 직후 `_append_log("preprocessing: {summary}")` (default 면 `"default"`, 아니면 `"numeric_scale=robust ..."` 처럼 변경 축만 나열). `feature_engineering` → `split` → `balance` 순으로 stage emit(balancer 실제 주입 여부와 무관하게 항상 emit 해서 UI 프로그레스 일관성 확보, balancer 가 not None 이면 `balance: strategy=<name>` 추가 로그). `train_all` 호출 시 `preprocess_cfg=pp_cfg_effective, balancer=balancer` 전달. ④ `_persist_and_save(preprocessing_config=...)` kwarg 추가 + 호출부에서 `config.preprocessing is not None and not pp_cfg_effective.is_default` 인 경우에만 `save_model_bundle(..., preprocessing_config=config.preprocessing)` 전달해 **기본 설정 학습 시에는 `preprocessing_config.json` 이 생성되지 않도록 하여 구 모델 바이트 동치 유지**(§9.8 하위호환 이월 동작). ⑤ 신규 `preview_preprocessing(dataset_id, config) -> FeaturePreviewDTO` — TrainingJob 생성 없이 읽기 전용, `read_tabular` 후 `split_feature_types_v2` + `plan_categorical_routing` + `build_feature_schema` 메타데이터만으로 `n_cols_in`/`n_cols_out`(= num passthrough + derived 수) / derived / encoding_summary / auto_downgraded 산출. `bool_as_numeric=False` 면 bool 컬럼을 effective_cat_cols 로 합류시켜 onehot 라우팅을 반영 (UI 기대와 일치). 예외: 데이터셋 부재 `NotFoundError` / 파일 부재 `StorageError` / 타깃 부재 `ValidationError`. **테스트 추가**: tests/services/test_training_service.py +14건 (TestPreprocessingForwarding 6: feature_engineering+balance stage 순서 검증 / default 시 run_log=`"preprocessing: default"` / custom 시 summary 축 나열 / custom 시 preprocessing_config.json 생성 / default 시 미생성 / 회귀+SMOTE TrainingConfig 레벨 거부, TestPreviewPreprocessing 8: iris 수치 전용 derived=∅·n_out=n_in / 고카디널리티 60 unique → auto_downgrade frequency / 저카디널리티 3 unique → onehot 확장 n_out=1+3 / 데이터셋 부재·타깃 부재·파일 부재 에러 3종 / bool_as_numeric=False 로 native bool→ onehot 2 파생 / preview 는 TrainingJob 미생성 / `dataclasses.replace(preprocessing=...)` 로 다른 필드 보존, TestBalancerIntegration 1: `imbalance=class_weight` end-to-end + run_log 에 `balance: strategy=class_weight`). tests/services/test_dto.py +8건 (TestPreprocessingConfigDTO 4: 기본값 / 14필드 왕복 보존 / FrozenInstanceError / `datetime_decompose=True+datetime_parts=[]` 조합을 DTO 는 허용하되 to_config 단계에서 ml 검증으로 차단, TestFeaturePreviewDTO 2: 최소 생성 / frozen). **품질 게이트**: 전체 pytest **466 passed** (이전 444 + 22), ruff/black/mypy 0 에러. `services/training_service.py` 커버리지 91% (258 stmts / 22 miss — 대부분 기존 실패 경로·롤백 분기), `services/dto.py` 99% (175 stmts / 1 miss — optional 경로), 전체 93.67%. `make plan-check` → `OK: in-progress=0` 재확인.
+- 2026-04-23 | 단계 9.6 | completed | `ml/trainers.py` + `ml/artifacts.py` §9.6 통합. **trainers 확장**: `train_all(specs, preprocessor, X_train, y_train, *, on_progress=None, preprocess_cfg=None, balancer=None)` 시그니처 확장(기존 위치 인자 순서 보존 → 회귀 0). `balancer: Callable[[estimator, X_train, y_train], tuple[estimator, X_train, y_train]]` 가 주어지면 각 spec 의 fresh estimator 에 대해 fit 직전 1회 호출되어 `(estimator, X_use, y_use)` 를 반환 → 해당 값으로 Pipeline 학습. balancer 호출 중 예외는 기존 `except Exception` 실패 격리 경로에 포함되어 해당 spec 만 `TrainedModel(status="failed")` 로 기록되고 다음 spec 은 진행. `preprocess_cfg: PreprocessingConfig | None` 은 본 구현에서 분기에 직접 쓰이지 않는 예약 파라미터(ruff `ARG001` 허용 주석) — 호출자(Service 레이어, §9.7)가 preprocessor/balancer 구성 책임을 갖고 train_all 은 orchestration 만 담당하도록 경계 유지. **§9.5 통합 주의사항 준수**: balancer 의 `X_train/y_train` 인자는 항상 `split_dataset` 이후의 train split 이어야 한다는 docstring 명시 — 테스트 세트 리샘플링 차단 책임은 호출자에 있음을 문서화. **artifacts 확장**: `ModelBundle` 에 `preprocessing: PreprocessingConfig = field(default_factory=PreprocessingConfig)` 필드 추가(`@dataclass(frozen=True, slots=True)` 유지, 기존 4필드 생성자 호출은 기본값 채움으로 하위호환). `save_model_bundle(..., preprocessing_config: PreprocessingConfig | None = None)` → 제공 시 `preprocessing_config.json` 생성 + `paths["preprocessing"]` 반환, 생략 시 파일 미생성으로 구 모델 디렉터리와 바이트 동치 유지. `load_model_bundle` 은 `preprocessing_config.json` 을 선택(optional) 로 처리: 존재 시 `PreprocessingConfig.from_dict`(누락 키 기본값 복원 로직 재사용), 부재 시 `PreprocessingConfig()` 로 fallback. `_REQUIRED_FILES` 에는 포함하지 않아 구 번들 로드가 `FileNotFoundError` 발생하지 않음. 신규 상수 `PREPROCESSING_FILENAME = "preprocessing_config.json"` + `__all__` 반영. tests/ml/test_trainers.py **+5건** (TestTrainAllBalancer: `preprocess_cfg` 단독 패스스루 / balancer 호출 횟수·인자 형태 검증(spec 당 1회, 입력 X/y row 수 일치) / balancer 가 리샘플 데이터 치환 시 fit 데이터가 치환본으로 변경되고 원본 X/y 는 불변 / balancer 예외가 해당 spec 만 failed 로 격리하고 다음 spec 은 성공 / 두 kwargs 모두 None 일 때 legacy 호출과 결과 동치). tests/ml/test_artifacts.py **+5건** (TestPreprocessingConfigPersistence: ModelBundle 기본 preprocessing = `PreprocessingConfig()` 보장 / save 시 config 생략 → 파일 없음(구 모델 동치) / save 시 config 제공 → JSON 생성 + 반환 paths["preprocessing"] / save→load 왕복으로 outlier=iqr/numeric_scale=robust/bool_as_numeric=False/imbalance=smote/smote_k_neighbors=3 등 모든 축 보존 + 로드 후 예측 가능 smoke / 구 번들(preprocessing 파일 부재) load 시 기본값 복원 + `_REQUIRED_FILES` 체크 무손상). 기존 테스트 무수정 통과(trainers 5건 / artifacts 10건). 전체 pytest **444 passed** (이전 433 + 신규 9 + 회귀 1건 수용), `make ci` OK — `ml/trainers.py` 커버리지 **96%** (54 stmts / 2 miss: `on_progress` 콜백 내부 `contextlib.suppress` 경로 단일 분기), `ml/artifacts.py` **97%** (70 stmts / 2 miss: legacy tuple 변환 드문 경로), 전체 93.71% (fail_under=60 충족). ruff/black/mypy 0 에러. `make plan-check` → `OK: in-progress=0` 재확인.
+- 2026-04-23 | 단계 9.5 | completed | `ml/balancing.py` 신설 + `requirements.txt` 에 `imbalanced-learn>=0.12,<1.0` 추가 (실측 설치 `imbalanced-learn==0.14.1`, 부수 `sklearn-compat==0.1.5`). 공개 API: `apply_imbalance_strategy(estimator, X_train, y_train, config, *, task_type="classification") -> (estimator, X_train, y_train)` + `SMOTE_AVAILABLE: bool` 플래그. 전략별 분기: **none** = passthrough(입력 그대로), **class_weight** = `estimator.set_params(class_weight="balanced")` 시도 후 `ValueError`/`TypeError` 캐치 → `logger.warning("class_weight 를 지원하지 않는 estimator 입니다. 적용을 건너뜁니다.")` + passthrough (KNN 같은 미지원 estimator 보호), **smote** = `_SMOTE(k_neighbors=config.smote_k_neighbors, random_state=settings.RANDOM_SEED).fit_resample(X_train, y_train)` 후 `logger.info("SMOTE 리샘플링 완료", extra={n_before, n_after, k_neighbors})`. **가드**: ① 회귀 + SMOTE → `MLTrainingError("회귀(regression) 작업에는 SMOTE 를 적용할 수 없습니다.")` (primary guard 는 `TrainingConfig.__post_init__`, 여기는 defense-in-depth), ② imblearn 미설치(`SMOTE_AVAILABLE=False`) + SMOTE → `MLTrainingError("SMOTE 를 사용하려면 imbalanced-learn 패키지가 필요합니다. ...")`, ③ 알 수 없는 전략 → `ValueError`. Streamlit/SQLAlchemy 의존 0, `PreprocessingConfig` 는 TYPE_CHECKING 블록으로 import 하여 런타임 최소화. tests/ml/test_balancing.py **8건** — TestNoneStrategy(1) / TestClassWeightStrategy(2: LogisticRegression 적용 / KNN 미지원 시 automl 로거가 `propagate=False` 이므로 `monkeypatch.setattr(balancing.logger, "warning", _capture)` 로 직접 가로채 검증 — caplog 로 안 잡히는 특성 기록) / TestSmoteStrategy(4: 20/200 불균형 → `counts[0]==counts[1]` 리밸런스 & 총 row 증가 / 가짜 `_FakeSMOTE` 로 `k_neighbors=7 & settings.RANDOM_SEED=42` 전달 확인 / 회귀 task_type → `MLTrainingError("회귀")` / `monkeypatch(SMOTE_AVAILABLE=False)` → `MLTrainingError("imbalanced-learn")`) / TestUnknownStrategy(1: `object.__setattr__` 로 frozen 우회 후 `"bogus"` → `ValueError`). **§9.6 통합 책임 이전 주의**: test 세트에는 호출 금지 — docstring 명시, trainers 호출자에서 train_split 이후에만 통과. 전체 pytest **433 passed** (이전 425 + 8), `make ci` OK — `ml/balancing.py` 커버리지 **95%** (41 stmts / 2 miss: 의존 부재 import 블록은 `pragma: no cover`), 전체 93.66%. ruff/black/mypy 0 에러. `make plan-check` → `OK: in-progress=0` 재확인.
+- 2026-04-23 | 단계 9.4 | completed | `ml/feature_engineering.py` 신설 — 순수 pandas/numpy/sklearn 기반 트랜스포머 2종. **`DatetimeDecomposer(parts)`**: sklearn `BaseEstimator+TransformerMixin`, `fit` 은 컬럼명만 기억(`feature_names_in_`/`n_features_in_`), `transform` 은 `pd.to_datetime(errors="coerce")` 후 `_PART_EXTRACTORS` 로 year/month/day/weekday/hour/is_weekend 생성(NaT→NaN 전파, 후단 SimpleImputer 가 처리), 출력 순서는 입력 컬럼 우선 `col_part1, col_part2, ..., col2_part1`, `get_feature_names_out` 로 `<col>_<part>` 이름 반환. `parts=()` / unknown part 는 `ValueError`. **`BoolToNumeric(true_tokens, false_tokens)`**: bool dtype → astype(float), 수치형은 0/1 유지 나머지 NaN(토큰 매핑 도메인 밖), object 는 `_normalize_series` 로 소문자·strip 비교 매핑(defaults: `{true,t,yes,y,1}` / `{false,f,no,n,0}`), 미지정 토큰/NaN→NaN(후단 imputer 가 대치). `true_tokens∩false_tokens≠∅` 시 `ValueError`. sklearn `clone` 은 `__init__` 하이퍼(parts/true_tokens/false_tokens)만 보존해 자동 호환 — 별도 `__sklearn_clone__` 불필요. **§9.3 통합**: `_build_datetime_pipeline` 의 `NotImplementedError` 가드가 자동 해제. `tests/ml/test_preprocess.py::test_datetime_decompose_true_integrates_with_feature_engineering` 추가 — `datetime_decompose=True` + `datetime_parts=(year,month)` 경로가 end-to-end 로 (3,3) shape 산출, NaN 0 검증. 기존 guarded 테스트는 구현 존재 분기로 자동 전환 통과. tests/ml/test_feature_engineering.py **26건** 신규 (Datetime 13: 기본 fit·year/month/day·weekday·is_weekend·hour·NaT 전파·문자열 coerce·다중 컬럼 순서·feature_names_out(fit/explicit)·invalid part·empty parts·clone·Pipeline+SimpleImputer end-to-end / Bool 13: native bool·int0/1·int 도메인 밖→NaN·yes/no·true/false·unknown→NaN·object NaN·다중 컬럼·커스텀 토큰·토큰 겹침 rejection·clone·feature_names_out·Pipeline+SimpleImputer). `§9.11` L931 의 `log1p/sqrt/yeo-johnson` 후속 이월 기록은 기존과 동일 유지 — 이번 스프린트 미구현. 전체 pytest **425 passed** (기존 398 + feature_engineering 26 + preprocess integration 1), `make ci` OK — `ml/feature_engineering.py` 커버리지 87%, `ml/preprocess.py` 97% 유지, 전체 93.63% (fail_under=60 충족). ruff/black/mypy 0 에러. `make plan-check` → `OK: in-progress=0` 재확인.
+- 2026-04-23 | 단계 9.3 | completed | `ml/preprocess.py` 확장 — **하위호환 보존**(기존 `build_preprocessor(num, cat)` 는 `_build_preprocessor_default` 로 분리, `config=None` 기본 경로는 기존 15건 무수정 통과). **신규 API**: `build_preprocessor(..., *, config, df_sample, datetime_cols, bool_cols)` 오버로드 + `plan_categorical_routing(df_sample, cat_cols, config) -> PreprocessingRouteReport`(encoding_per_col + auto_downgraded 기록) + `split_feature_types_v2(df, target, excluded) -> (num, cat, dt, bool)` 4-tuple(native dtype 기준: is_datetime64_any_dtype / is_bool_dtype) + `build_feature_schema(..., datetime_cols, bool_cols, config, route_report)` 확장(`_enumerate_derived_features` 헬퍼로 onehot=컬럼별 카테고리 전개 / ordinal·frequency=단일 / datetime_parts / bool_as_numeric 규칙 산출). **트랜스포머**(sklearn `BaseEstimator + TransformerMixin` 으로 직접 구현 — 별도 `__sklearn_clone__` 없이 clone 자동 지원): `IQRClipper(k)` (Q1/Q3 ± k·IQR clip, NaN 통과) · `Winsorizer(p)` (p/1-p 분위수 clip) · `FrequencyEncoder` (학습 빈도 비율 0~1 매핑, unseen→0.0). **내부 팩토리**: `_build_numeric_pipeline`(impute → optional outlier → scaler, `numeric_impute=drop_rows` 는 방어용 most_frequent 로 fallback, `numeric_scale=none` 은 스케일 스텝 skip) · `_build_categorical_pipeline_for_encoding` (+ `_make_cat_transformers` 그룹핑 헬퍼, encoding 별로 sklearn 인스턴스 분할. `FunctionTransformer(_coerce_to_object)` 선행으로 bool → object 승격 — SimpleImputer 가 bool dtype 을 거부하는 이슈 해소) · `_build_datetime_pipeline` (§9.4 의 `DatetimeDecomposer` 미존재 시 `NotImplementedError("§9.4 ...")`) · `_build_bool_passthrough` (sklearn `"passthrough"` 반환; 네이티브 bool 은 자동 0/1). 고카디널리티 자동 라우팅은 `categorical_encoding="onehot"` + `highcard_auto_downgrade=True` + `nunique > highcard_threshold` 3조건에서 `frequency` 로 강등, ColumnTransformer 의 `_route_report_` 속성으로 부착(§9.9 UI 미리보기 소비). tests/ml/test_preprocess.py **+26건** (TestSplitFeatureTypesV2·TestIQRClipper·TestWinsorizer·TestFrequencyEncoder·TestBuildPreprocessorConfig·TestPlanCategoricalRouting·TestBuildFeatureSchemaExtended) — default=MVP 동치 shape / scale=none·robust·impute=constant_zero·iqr_clip / onehot·ordinal·frequency encoding / 고카디널리티 자동 강등 on/off / bool passthrough / bool_as_numeric=False 경로(FunctionTransformer 로 bool→object 후 onehot) / datetime_decompose=True 가드 / datetime_decompose=False 제외 / 라우팅 계산 (df_sample=None 무강등) / build_feature_schema 확장(기본=빈 derived, onehot 전개, datetime_parts, bool_numeric, route_report 기반 다운그레이드 반영). **전체 pytest 398 passed** (기존 370 + §9.3 신규 28 — 19/3/4/2 + 기존 compat 15 유지), `make ci` OK — `ml/preprocess.py` 커버리지 97%, 전체 94.05%, fail_under=60 충족. ruff/black/mypy 0 에러. `make plan-check` → `OK: in-progress=0` 재확인.
+- 2026-04-23 | 단계 9.10 | addendum | in-app 매뉴얼(`docs/manual/`) 에도 §9 내용을 반영. **§9.10 원 스펙(README.md)** 외 누락이었던 매뉴얼 보강. (1) `docs/manual/03_training.md`: "할 수 있는 일" 에 고급 전처리 + 피처 변환 미리보기 2줄 추가, "기본 사용 순서" 5단계로 확장(3→고급 전처리, 4→미리보기 신설), **"고급 전처리 (선택) 옵션"** 소절 신규 — 10개 축(수치 결측/스케일/이상치·범주 결측/인코딩/고카디널리티 임계·datetime 분해·bool 수치 통과·불균형 전략/SMOTE k) 표 + 커스텀 뱃지/`AuditLog(training.preprocessing_customized)` 설명, **"피처 변환 미리보기 (FR-058)"** 소절 신규 — 메트릭 3개 + source/derived_name/kind 테이블 + auto_downgrade info 설명. "주의사항 & 팁" 에 SMOTE 분류 전용·robust/iqr_clip 권장 케이스 2줄 추가. "개발자 관점" 표 보정: 서비스에 `preview_preprocessing` 추가, ML 목록에 `feature_engineering.py` · `balancing.py` · `type_inference.py` 추가, 스키마에 `PreprocessingConfig` 추가, 저장 레이아웃 4→최대 5개(선택 `preprocessing_config.json`) + 바이트 동치 주석, 감사 행 신설 + FR 범위에 FR-055~058 추가. **"확장 포인트"** 확장 — 새 전처리 축/트랜스포머/불균형 전략 추가 레시피 3개 신설. "자주 겪는 오류" 표에 §9 신규 예외 4개 추가(회귀+SMOTE / imblearn 미설치 / datetime parts 빈 값 / outlier 파라미터 범위). (2) `docs/manual/00_overview.md`: "빠른 사용 순서" 3단계 하단에 "필요하면 고급 전처리 expander + 미리보기" 보조 bullet 1줄 추가 (`FR-055~058`). **검증**: `pytest tests/docs/ tests/ui/test_help.py -q` → 28 passed (매뉴얼 SSOT 파일 존재 / anchor / render_help smoke / 00_manual 검색 smoke 전부 통과). `make ci` → **478 passed** · coverage 93.70% 유지 · ruff/black/mypy 0 에러 · `make plan-check` → `OK: in-progress=0`.
+- 2026-04-23 | 단계 9.10 | completed | 문서 · 품질 · 계획 마감. **`ARCHITECTURE.md` §6.2 확장**: 제목을 `ml/preprocess.py` 단독 → `ml/preprocess.py + ml/feature_engineering.py + ml/balancing.py` 3모듈 묶음으로 수정. 기본 정책은 `PreprocessingConfig()` 의 MVP 동치임을 명시. 전처리 데이터 흐름 ASCII 다이어그램(입력 DataFrame → split_feature_types_v2 → 4개 경로(numeric/categorical/datetime/bool) + 각 경로 옵션 축 · plan_categorical_routing 으로 고카디널리티 자동 강등 · ColumnTransformer 의 `_route_report_` 부착 · apply_imbalance_strategy(분류 전용) → Estimator.fit) 추가. `PreprocessingConfig` 불변 dataclass + `is_default` 시 아티팩트·감사 억제로 바이트 동치 유지 문단, SMOTE 의 1차/2차 가드(`TrainingConfig.__post_init__` + `apply_imbalance_strategy`) 설명 추가. **`ARCHITECTURE.md` §6.4 확장**: 파일 레이아웃을 4파일 → 5파일(필수 4: model/preprocessor/feature_schema/metrics · 선택 1: preprocessing_config.json) 로 업데이트. 파일 부재 시 `PreprocessingConfig()` fallback + `Event.MODEL_LEGACY_PREPROCESSING_LOADED` 1회 emit 규약 명시. 필수 4개 누락은 `FileNotFoundError`, `preprocessing_config.json` 만 예외 로 "선택 사항" 으로 규정. **`.cursor/rules/ml-engine.mdc` 확장**: "PreprocessingConfig 주입 규약 (§9.1~§9.9, FR-055~058)" 섹션 신설 — `build_preprocessor` 의 2가지 호출 형태(기본/커스텀) · config 불변 약속 · `PreprocessingConfig()` ≡ `config=None` 동치 · `is_default` 기반 아티팩트 저장 책임은 service 층이라는 경계 · SMOTE/class_weight 의 1차/2차 가드 · `plan_categorical_routing` + `_route_report_` 속성 규약 · `imblearn` 선택 의존/`SMOTE_AVAILABLE` 가드. 아티팩트 섹션도 5파일 + 레거시 fallback 규약 반영. **`README.md` 확장**: "첫 화면에서 해보기" 하위에 "고급 전처리 (선택) — §9" 단락 1개 추가 — 학습 페이지 expander 설명 + 제어 축 목록(결측/스케일/이상치/인코딩/고카디널리티 강등/datetime 분해/bool 수치 통과/분류 불균형) + 미리보기 카드 용도 + "기본값은 v0.1.0 과 바이트 동치(preprocessing_config.json · training.preprocessing_customized 미생성)" 명시. **검증**: (a) 코드/스키마 변경 0 — `git diff --stat main...HEAD -- repositories/ scripts/init_db.py` 빈 출력. (b) `DATABASE_URL="sqlite:///db/_smoke_9_10.db" .venv/bin/python scripts/init_db.py --drop --seed` 정상 수행 — `drop_all.completed` → `create_all.completed | tables=['audit_logs', 'datasets', 'models', 'prediction_jobs', 'projects', 'training_jobs', 'users']` 7테이블 + `seed.system_user.created` + `project.created id=1` + `OK` (임시 DB 는 테스트 후 삭제). (c) `make ci` → **478 passed** · coverage 94% (ml+services 모듈 종합) / 93.70% 전체 (fail_under=60 충족) / ruff + black + mypy 0 에러. 세부 커버리지: `ml/schemas.py` 97%, `ml/preprocess.py` 97%, `ml/artifacts.py` 97%, `ml/balancing.py` 95%, `ml/feature_engineering.py` 87%, `ml/type_inference.py` 92%, `services/training_service.py` 92% — §9 전 신규 코드는 목표치 80% 이상 충족. (d) `make plan-check` → `OK: in-progress=0` — §9.10 8개 체크박스 전부 `[x]`, §9 전체 섹션 9.1~9.10 마감. **§9 전체 스프린트 요약**: 7 섹션 마일스톤(9.1 schemas · 9.2 type_inference · 9.3 preprocess v2 · 9.4 feature_engineering · 9.5 balancing · 9.6 training_service pipeline · 9.7 service api · 9.8 artifacts/audit · 9.9 UI expander · 9.10 문서) 완료. 테스트 총 470 → 478 (+8, §9.9 UI), 기존 §9.8 검증 470 는 변함없이 유지. `§9.11 후속 범위(이터레이션 제외)` 는 계획서 유지 — Target encoding · log1p/yeojohnson · 프리셋 저장 · fit-time optuna 등은 추후 스프린트.
+- 2026-04-23 | 단계 9.9 | completed | UI — `pages/03_training.py` 고급 전처리 expander + 미리보기 완료. **메시지**: `utils/messages.py` 에 `PREPROCESSING_ADVANCED_TITLE` / `PREPROCESSING_CUSTOM_BADGE` / `PREPROCESSING_PREVIEW_TITLE` / `PREPROCESSING_PREVIEW_HINT` / `PREPROCESSING_SMOTE_UNAVAILABLE` / `PREPROCESSING_SMOTE_CLASSIFICATION_ONLY` / `PREPROCESSING_PREVIEW_AUTO_DOWNGRADED` 7개 상수 추가 — 페이지 내 한글 리터럴 최소화(자유문구는 expander 내 `st.caption` 설명 텍스트 일부만 로컬 유지). **페이지 확장**: `from ml import balancing as ml_balancing` (모듈 참조로 두어 테스트의 `monkeypatch.setattr(bal_mod, "SMOTE_AVAILABLE", False)` 가 UI 에도 즉시 반영되게 함 — 과거 `from ... import SMOTE_AVAILABLE` 복사 패턴 문제 회피) + `ml.feature_engineering.DEFAULT_DATETIME_PARTS` + `ml.schemas.PreprocessingConfig` import. 위젯 key 17개 (`PP_NUM_IMPUTE_KEY` … `PP_PREVIEW_RESULT_KEY`) Final 상수화 + 옵션 튜플(`_NUM_IMPUTE_OPTIONS` / `_NUM_SCALE_OPTIONS` / `_OUTLIER_OPTIONS` / `_CAT_IMPUTE_OPTIONS` / `_CAT_ENCODING_OPTIONS` / `_IMBALANCE_OPTIONS_CLASSIFICATION` / `_IMBALANCE_OPTIONS_REGRESSION`) 선언. **섹션 헬퍼 5종 분리** (ruff C901 complexity 충족): `_render_numeric_section` (impute/scale/outlier 3-col selectbox + `iqr_clip` 선택 시 `outlier_iqr_k` number_input / `winsorize` 선택 시 `winsorize_p`) · `_render_categorical_section` (impute/encoding + `highcard_auto_downgrade` 체크박스(기본 True) + `highcard_threshold` 숫자) · `_render_advanced_types_section` (`datetime_decompose` 체크 on 시 `DEFAULT_DATETIME_PARTS` multiselect + `bool_as_numeric` 체크) · `_render_imbalance_section` (`_imbalance_options(task_type)` 결과로 옵션 축소 + 사유 caption — 회귀는 `("none",)` + "분류 작업에서만" 문구, 분류+imblearn 미설치는 smote 제외 + "imbalanced-learn 미설치" 문구; 세션 stale smote 값은 옵션 바깥이면 "none" 으로 정규화) · `_handle_preview_click` (`_collect_preprocessing_config` → `TrainingConfig(preprocessing=...)` 조립 → `training_service.preview_preprocessing(dataset_id, cfg)` 호출 → `AppError` / `ValueError` 는 `flash("error", ...)` + 결과 초기화). **메인 헬퍼**: `_render_advanced_preprocessing_expander(task_type, dataset_id)` — 현재 `PreprocessingConfig.is_default` 가 False 면 expander 라벨에 "⚙️ 커스텀 전처리 적용됨" 점 구분 suffix 추가(닫힌 상태에서도 커스텀 시각 단서), 섹션 5종 호출 후 divider → `PREPROCESSING_PREVIEW_HINT` caption + "미리보기" 버튼 → 저장된 `pp_preview_result` 가 있으면 `_render_preview_result` 렌더. `_render_preview_result` 는 `st.metric("원본 열", n_cols_in)` / `st.metric("변환 후 열", n_cols_out)` / `st.metric("파생 피처", len(derived))` 3개 + `auto_downgraded` 존재 시 `st.info` (컬럼명 ", " 조인) + `st.dataframe([{source, kind, derived_name}, ...], width="stretch", hide_index=True)` (파생 0 이면 caption 대체). **`_collect_preprocessing_config(task_type)`**: 세션 상태에서 14개 필드를 읽어 `PreprocessingConfig` 조립, 회귀+smote 잔존 시 강제 none 정규화, `ValueError` 발생 시 flash + None 반환(호출자는 실행을 건너뜀). **`_render_config_form` 통합**: job_name 아래에서 `_render_advanced_preprocessing_expander(task_type, dataset_id)` 호출 → `pp_cfg` 확보, `is_default=False` 면 expander 바깥에도 `st.caption(PREPROCESSING_CUSTOM_BADGE)` (테스트 captions 탐지 경로). 학습 실행 제출 시 `pp_cfg is None` 이면 `st.rerun` + 학습 건너뜀. `TrainingConfig(..., preprocessing=pp_cfg if not pp_cfg.is_default else None)` — 기본값은 **명시적으로 None 으로 떨어뜨려** 기존 하위호환 경로(§9.6: `preprocessing_config.json` 미생성 + §9.8: `training.preprocessing_customized` AuditLog 미기록)를 그대로 유지. **테스트**: `tests/ui/test_training_page_advanced.py` 8건 — `test_expander_defaults_are_backward_compatible` (위젯 초기 세션에서 14개 필드를 재조립 → `PreprocessingConfig.is_default==True`) / `test_regression_hides_smote_option` (회귀 전환 후 `pp_imbalance` radio options 튜플이 `("none",)` 로 축소) / `test_regression_forces_imbalance_to_none_even_if_session_had_smote` (세션에 과거 "smote" 가 남아있어도 회귀 렌더 후 "none" 으로 덮어쓰기) / `test_smote_option_hidden_when_imblearn_missing` (`monkeypatch.setattr(ml.balancing, "SMOTE_AVAILABLE", False)` → `pp_imbalance.options` 에 "smote" 부재 + `at.caption` 에 "imbalanced-learn" 포함) / `test_preview_button_renders_feature_preview` (혼합 CSV: num×2 + cat_low(3) + cat_high(nunique=50, unique_ratio=0.5 → suggest_excluded 제외) + bool + datetime → 미리보기 클릭 후 metric 3종 label + `pp_preview_result` 가 `FeaturePreviewDTO` + `n_cols_out > n_cols_in`) / `test_preview_auto_downgrade_shows_info` (임계 5로 낮춤 → cat_high 가 `auto_downgraded` 에 포함 + info 문자열에 "frequency" 존재) / `test_custom_preprocessing_badge_caption_appears` (`pp_numeric_scale="robust"` 세션 세팅 후 run → captions 에 "커스텀 전처리") / `@slow test_robust_scale_propagates_to_run_log` (robust 로 실제 학습 → `TrainingJob.run_log` 에 "numeric_scale=robust" 포함). **테스트 픽스처**: `_mixed_csv` 에서 `cat_high` 는 `f"v{i%50}"` 로 만들어 nunique=50 / unique_ratio=0.5 — `suggest_excluded_columns(ID_UNIQUE_RATIO_THRESHOLD=0.95)` 제안 대상 아님을 확인 후 auto_downgrade 테스트 케이스 성립. SafeSessionState 는 `.get()` 을 지원하지 않으므로 테스트에서 `"key" in at.session_state` + subscript 사용. **품질**: `_render_advanced_preprocessing_expander` 를 5개 섹션 헬퍼로 쪼개 C901 complexity=12 → <10 해소. ruff auto-fix 로 import 정렬(I001) 자동 교정. `make ci` **478 passed** (§9.8 470 → §9.9 +8), coverage 93.70% 유지(fail_under=60 충족), `services/training_service.py` 92% / `ml/balancing.py` 95% / `ml/preprocess.py` 97%, ruff/black/mypy 0 에러. `make plan-check` → `OK: in-progress=0` 유지.
+- 2026-04-23 | 단계 9.8 | completed | 아티팩트 / 감사 / 하위호환 통합. **`utils/events.py` 확장**: `TRAINING_PREPROCESSING_CUSTOMIZED = "training.preprocessing_customized"` · `MODEL_LEGACY_PREPROCESSING_LOADED = "model.legacy_preprocessing_loaded"` 상수 2개 추가(AuditLog.action_type + 구조화 로그 공통). **`ml/artifacts.py` 확장**: `utils.log_utils.get_logger` + `log_event` + `utils.events.Event` import. `load_model_bundle` 의 `preprocessing_config.json` 부재 분기에서 `log_event(logger, Event.MODEL_LEGACY_PREPROCESSING_LOADED, model_dir=str(source_dir))` 1회 emit — 파일이 존재하면 호출되지 않음(정상 로드 경로에는 noise 미발생). `ml/` 레이어 규칙 준수: streamlit/sqlalchemy 비의존 유지(이미 `ml/balancing.py`, `ml/registry.py` 가 `utils.log_utils` 사용 중 — 허용 패턴). **`services/training_service.py` 확장**: `run_training` 의 preprocessing 요약 run_log append 직후 동일 `session_scope` 내에서 `pp_cfg_effective.is_default` 가 False 일 때만 `audit_repository.write(action_type=Event.TRAINING_PREPROCESSING_CUSTOMIZED, target_type="TrainingJob", target_id=job_id, detail={"summary": pp_cfg_effective.summary()})` + 동일 이벤트로 `log_event` 1회. **하위호환 보장**: 기본 config 학습은 ① `preprocessing_config.json` 미생성(§9.6) + ② `training.preprocessing_customized` AuditLog 미기록 — 두 축으로 v0.1.0 모델과 바이트·감사 동치 유지. `<model_dir>/preprocessing_config.json` 저장/로드 왕복 테스트는 §9.6 의 `TestPreprocessingConfigPersistence::test_load_roundtrips_preprocessing_config` 가 이미 커버 → §9.8 체크박스 1 충족으로 표식. **테스트**: `tests/ml/test_artifacts.py::TestLegacyPreprocessingLoggedOnce` 2건 신규 — legacy 번들 로드 시 `log_event` monkeypatch 으로 `MODEL_LEGACY_PREPROCESSING_LOADED` 정확히 1회 캡처 + `model_dir` extra 일치 / 모던 번들(preprocessing_config 있음) 로드 시 legacy 이벤트 0건 확인. `tests/services/test_training_service.py::TestPreprocessingForwarding` 에 2건 추가 — 커스텀 config 학습 후 `audit_repository.list_logs(action_type="training.preprocessing_customized")` 를 `target_id=job_id` 로 필터해 정확히 1건 + `detail_json["summary"]` 에 `numeric_scale=robust` / `imbalance=class_weight` 포함 검증 / 기본 config 학습 후 동일 이벤트 0건 확인. **전체 pytest 470 passed** (§9.7 466 → §9.8 +4), `make ci` OK — `ml/artifacts.py` 97%, `services/training_service.py` 92%, 전체 93.70%, fail_under=60 충족. ruff/black/mypy 0 에러. `make plan-check` → `OK: in-progress=0` 유지.
 - 2026-04-20 | 단계 5.1 | completed | app.py 재작성 + `pages/components/layout.py` 신설 + `utils/db_utils.py` 추가. 구성: `configure_page`(set_page_config 래퍼, 페이지 재실행에 대비해 `StreamlitAPIException` suppress) / `render_sidebar`(DB 뱃지·현재 프로젝트 카드·선택 해제·네비 리스트) / `render_page_header`(title+caption+`render_flashes`). 홈 본문은 서비스 소개 → 최근 프로젝트 3장 카드(`project_service.list_projects[:3]`, "선택하기" 클릭 시 `SessionKey.CURRENT_PROJECT_ID` 갱신 + flash("success") + `st.rerun()`) → "프로젝트 페이지로 이동"/"문서 보기" CTA. DB 초기화 체크는 `utils.db_utils.is_db_initialized` 로 inspector 경유 7개 필수 테이블 존재 검사, 미초기화 시 본문+사이드바 양쪽에서 `init_db` 명령 안내. Stale project id 는 `get_project` `NotFoundError` 를 잡아 세션에서 조용히 제거. tests: `tests/utils/test_db_utils.py` 5건(전체·부분·공DB·깨진 엔진·REQUIRED_TABLES 회귀), `tests/ui/test_app_home.py` 5건 (Streamlit `AppTest` 기반: DB 미초기화 안내 / 프로젝트 없을 때 인트로 / 3개 카드 노출 + 선택 상호작용 / stale id 자동 제거 / 사이드바 현재 프로젝트 표시). **전체 pytest 208건 green**, ruff/black clean. `streamlit run app.py --server.headless true --server.port 8599` → `/_stcore/health=ok`, `/=HTTP 200` smoke 성공.
 
 ---

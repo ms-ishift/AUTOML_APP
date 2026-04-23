@@ -62,6 +62,10 @@ streamlit run app.py
 4. **결과 비교** 에서 베스트 모델 저장 (★)
 5. **예측** 에서 단건/배치 예측 → CSV 다운로드
 
+### 고급 전처리 (선택) — §9
+
+학습 페이지 하단의 **"고급 전처리 (선택)"** expander 에서 기본 파이프라인(median+standard / most_frequent+onehot)을 벗어나 다음 축을 제어할 수 있다 — 결측 대치 전략, 스케일(`standard` / `minmax` / `robust` / `none`), 이상치 처리(`iqr_clip` · `winsorize`), 범주 인코딩(`onehot` / `ordinal` / `frequency`) + 고카디널리티 자동 강등, datetime 컬럼 분해(year/month/day/weekday/hour/is_weekend), bool 수치 통과, 분류 불균형 대응(`class_weight` / `smote`, `imbalanced-learn` 필요). **"미리보기"** 버튼은 실제 학습 전에 `원본 열 → 변환 후 열` 수와 파생 피처 목록을 카드로 보여준다. 기본값만 사용하면 v0.1.0 모델과 **바이트 동치** — `preprocessing_config.json` 아티팩트 · `training.preprocessing_customized` 감사 로그 모두 생성되지 않는다.
+
 ---
 
 ## 기술 스택

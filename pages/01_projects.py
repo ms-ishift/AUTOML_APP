@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Final
 
 import streamlit as st
 
+from pages.components.help import render_help
 from pages.components.layout import (
     configure_page,
     render_page_header,
@@ -267,6 +268,7 @@ def main() -> None:
     current = _load_current_project(db_ready)
     render_sidebar(current_project=current, db_ready=db_ready)
     render_page_header(PAGE_TITLE, caption=PAGE_CAPTION)
+    render_help("01_projects")
 
     if not db_ready:
         st.error("DB가 아직 초기화되지 않았습니다.")

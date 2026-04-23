@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 from config.settings import settings
 from ml.artifacts import save_model_bundle
+from ml.balancing import apply_imbalance_strategy
 from ml.evaluators import (
     METRIC_DIRECTIONS,
     build_plot_data,
@@ -38,12 +39,16 @@ from ml.evaluators import (
     select_best,
 )
 from ml.preprocess import (
+    PreprocessingRouteReport,
     build_feature_schema,
     build_preprocessor,
+    plan_categorical_routing,
     prepare_xy,
     split_feature_types,
+    split_feature_types_v2,
 )
 from ml.registry import get_specs
+from ml.schemas import PreprocessingConfig
 from ml.trainers import split_dataset, train_all
 from repositories import (
     audit_repository,
@@ -53,6 +58,7 @@ from repositories import (
 )
 from repositories.base import session_scope
 from services.dto import (
+    FeaturePreviewDTO,
     ModelComparisonRowDTO,
     TrainingJobDTO,
     TrainingResultDTO,
@@ -72,8 +78,10 @@ from utils.messages import Msg, entity_not_found
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    import pandas as pd
+
     from ml.schemas import FeatureSchema, ScoredModel, TrainingConfig
-    from ml.trainers import TrainedModel
+    from ml.trainers import BalancerCallable, TrainedModel
 
     ProgressCallback = Callable[[str, float], None]
 
@@ -81,9 +89,12 @@ logger = get_logger(__name__)
 
 _ERROR_TRUNCATE_LEN = 500
 # 학습 수명주기 단계 가중치. ratio 계산에 쓰인다.
+# §9.7: feature_engineering / balance 단계 삽입 (항상 emit — 기본 설정에서도 stage 출력 보장).
 _STAGE_RATIO = {
     "preprocessing": 0.05,
+    "feature_engineering": 0.07,
     "split": 0.10,
+    "balance": 0.12,
     "train_start": 0.20,
     "train_end": 0.70,
     "score": 0.80,
@@ -221,6 +232,7 @@ def _persist_and_save(
     n_test: int,
     saved_dirs: list[Path],
     plot_data_by_algo: dict[str, dict[str, Any]] | None = None,
+    preprocessing_config: PreprocessingConfig | None = None,
 ) -> None:
     """§4.3a 보상 트랜잭션: Model insert → 파일 저장 → set_paths → best/상태 확정.
 
@@ -265,6 +277,7 @@ def _persist_and_save(
                     n_train=n_train,
                     n_test=n_test,
                 ),
+                preprocessing_config=preprocessing_config,
             )
             saved_dirs.append(model_dir)
 
@@ -406,23 +419,91 @@ def _create_running_job(
 def _build_preprocessing(
     df: Any,
     config: TrainingConfig,
-) -> tuple[Any, FeatureSchema, Any, Any]:
-    """전처리기/스키마/(X, y) 빌드. 피처가 비면 ``ValidationError``."""
-    num_cols, cat_cols = split_feature_types(
+) -> tuple[Any, FeatureSchema, Any, Any, PreprocessingRouteReport | None]:
+    """전처리기/스키마/(X, y) 빌드. 피처가 비면 ``ValidationError``.
+
+    §9.7: ``config.preprocessing`` 이 주어지면 고급 설정을 그대로 ml 레이어로 forward.
+    None 이면 기존 MVP 경로(인자 없이 `build_preprocessor` 호출) 유지 → 기존 테스트 회귀 0.
+
+    반환값 마지막 ``route_report`` 는 §9.9 UI 미리보기 소비용. 레거시 경로는 ``None``.
+    """
+    pp_cfg = config.preprocessing
+    if pp_cfg is None:
+        num_cols, cat_cols = split_feature_types(
+            df,
+            target=config.target_column,
+            excluded=config.excluded_columns,
+        )
+        try:
+            preprocessor = build_preprocessor(num_cols, cat_cols)
+        except ValueError as exc:
+            raise ValidationError(
+                "학습에 사용할 수치/범주 피처가 없습니다. 제외 컬럼 설정을 확인해 주세요.",
+                cause=exc,
+            ) from exc
+        feature_schema = build_feature_schema(df, num_cols, cat_cols, config.target_column)
+        X, y = prepare_xy(df, config)
+        return preprocessor, feature_schema, X, y, None
+
+    # §9.7 신규 경로: 타입 분류 v2 + config 기반 preprocessor + route report
+    num_cols, cat_cols, dt_cols, bool_cols = split_feature_types_v2(
         df,
         target=config.target_column,
         excluded=config.excluded_columns,
     )
+    route_report = plan_categorical_routing(df, cat_cols, pp_cfg)
     try:
-        preprocessor = build_preprocessor(num_cols, cat_cols)
+        preprocessor = build_preprocessor(
+            num_cols,
+            cat_cols,
+            config=pp_cfg,
+            df_sample=df,
+            datetime_cols=dt_cols,
+            bool_cols=bool_cols,
+        )
     except ValueError as exc:
         raise ValidationError(
             "학습에 사용할 수치/범주 피처가 없습니다. 제외 컬럼 설정을 확인해 주세요.",
             cause=exc,
         ) from exc
-    feature_schema = build_feature_schema(df, num_cols, cat_cols, config.target_column)
+    feature_schema = build_feature_schema(
+        df,
+        num_cols,
+        cat_cols,
+        config.target_column,
+        datetime_cols=dt_cols,
+        bool_cols=bool_cols,
+        config=pp_cfg,
+        route_report=route_report,
+    )
     X, y = prepare_xy(df, config)
-    return preprocessor, feature_schema, X, y
+    return preprocessor, feature_schema, X, y, route_report
+
+
+def _make_balancer(
+    pp_cfg: PreprocessingConfig,
+    task_type: str,
+) -> BalancerCallable | None:
+    """§9.7: PreprocessingConfig 의 imbalance 전략에 맞는 per-spec balancer 생성.
+
+    - ``none`` → None (train_all 패스스루)
+    - ``class_weight`` / ``smote`` → 각 spec 의 fresh estimator 에 대해
+      ``apply_imbalance_strategy`` 를 호출하는 클로저.
+
+    **주의**: 이 callable 에 전달되는 ``X_train/y_train`` 은 반드시 ``split_dataset``
+    이후의 train split 이어야 한다 (§9.5 docstring). 호출자(run_training)가 보장.
+    """
+    if pp_cfg.imbalance == "none":
+        return None
+
+    def _balancer(
+        estimator: Any, X_train: pd.DataFrame, y_train: pd.Series
+    ) -> tuple[Any, pd.DataFrame, pd.Series]:
+        return apply_imbalance_strategy(
+            estimator, X_train, y_train, pp_cfg, task_type=task_type
+        )
+
+    return _balancer
 
 
 # --------------------------------------------------------- Public use-cases
@@ -440,12 +521,14 @@ def run_training(
 
     진행 단계 (``on_progress(stage, ratio)``)::
 
-        "preprocessing"  0.05
-        "split"          0.10
-        "train:<algo>"   0.20 → 0.70 (선형)
-        "score"          0.80
-        "save"           0.90
-        "completed"      1.00
+        "preprocessing"        0.05
+        "feature_engineering"  0.07   (§9.7 추가)
+        "split"                0.10
+        "balance"              0.12   (§9.7 추가 — 실제 리샘플 여부와 무관하게 emit)
+        "train:<algo>"         0.20 → 0.70 (선형)
+        "score"                0.80
+        "save"                 0.90
+        "completed"            1.00
     """
     project_id, df = _load_dataset_for_training(config)
     metric_key = _resolve_metric_key(config.task_type, config.metric_key)
@@ -454,7 +537,29 @@ def run_training(
     _emit(on_progress, "preprocessing", _STAGE_RATIO["preprocessing"])
 
     try:
-        preprocessor, feature_schema, X, y = _build_preprocessing(df, config)
+        preprocessor, feature_schema, X, y, _route_report = _build_preprocessing(df, config)
+
+        # §9.7: preprocessing 요약을 run_log 에 1행 append
+        pp_cfg_effective = config.preprocessing or PreprocessingConfig()
+        with session_scope() as session:
+            _append_log(session, job_id, f"preprocessing: {pp_cfg_effective.summary()}")
+            # §9.8: 고급 전처리 커스터마이즈 시 AuditLog + 구조화 로그 1회
+            if not pp_cfg_effective.is_default:
+                audit_repository.write(
+                    session,
+                    action_type=Event.TRAINING_PREPROCESSING_CUSTOMIZED,
+                    target_type="TrainingJob",
+                    target_id=job_id,
+                    detail={"summary": pp_cfg_effective.summary()},
+                )
+                log_event(
+                    logger,
+                    Event.TRAINING_PREPROCESSING_CUSTOMIZED,
+                    job_id=job_id,
+                    summary=pp_cfg_effective.summary(),
+                )
+
+        _emit(on_progress, "feature_engineering", _STAGE_RATIO["feature_engineering"])
 
         # 4) split
         _emit(on_progress, "split", _STAGE_RATIO["split"])
@@ -467,6 +572,15 @@ def run_training(
         X_train, X_test, y_train, y_test = split_dataset(
             X, y, test_size=config.test_size, task_type=config.task_type
         )
+
+        # §9.6 주의사항: balancer 는 반드시 train split 이후에 적용. 테스트 세트 리샘플 금지.
+        _emit(on_progress, "balance", _STAGE_RATIO["balance"])
+        balancer = _make_balancer(pp_cfg_effective, config.task_type)
+        if balancer is not None:
+            with session_scope() as session:
+                _append_log(
+                    session, job_id, f"balance: strategy={pp_cfg_effective.imbalance}"
+                )
 
         # 5) 다중 학습
         specs = get_specs(config.task_type)
@@ -491,6 +605,8 @@ def run_training(
             X_train,
             y_train,
             on_progress=_bridge_progress,
+            preprocess_cfg=pp_cfg_effective,
+            balancer=balancer,
         )
 
         # 6) 평가
@@ -524,6 +640,11 @@ def run_training(
                 n_test=n_test,
                 saved_dirs=saved_dirs,
                 plot_data_by_algo=plot_data_by_algo,
+                preprocessing_config=(
+                    config.preprocessing
+                    if config.preprocessing is not None and not pp_cfg_effective.is_default
+                    else None
+                ),
             )
         except Exception as exc:
             # DB 트랜잭션은 session_scope 가 rollback. 파일만 정리.
@@ -576,8 +697,86 @@ def list_training_jobs(project_id: int) -> list[TrainingJobDTO]:
         return [TrainingJobDTO.from_orm(r) for r in rows]
 
 
+def preview_preprocessing(
+    dataset_id: int,
+    config: TrainingConfig,
+) -> FeaturePreviewDTO:
+    """FR-058 / §9.7: 실제 fit 없이 PreprocessingConfig 기반 변환 요약을 산출.
+
+    - 학습 잡을 **생성하지 않는다**. 읽기 전용 유스케이스.
+    - 5만 행 기준 < 2초 목표 (NFR-003) — ``nunique`` 기반 메타데이터만 사용.
+    - ``config.preprocessing`` 이 None 이면 ``PreprocessingConfig()`` 기본값으로 계산.
+    """
+    with session_scope() as session:
+        dataset = dataset_repository.get(session, dataset_id)
+        if dataset is None:
+            raise NotFoundError(entity_not_found("데이터셋", dataset_id))
+        file_path = Path(dataset.file_path)
+
+    if not file_path.exists():
+        raise StorageError(Msg.FILE_PARSE_FAILED)
+
+    try:
+        df = read_tabular(file_path)
+    except AppError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - 파일 파싱 실패는 StorageError 로 통일
+        raise StorageError(Msg.FILE_PARSE_FAILED, cause=exc) from exc
+
+    if config.target_column not in df.columns:
+        raise ValidationError(f"타깃 컬럼({config.target_column})이 데이터셋에 존재하지 않습니다.")
+
+    pp_cfg = config.preprocessing or PreprocessingConfig()
+
+    num_cols, cat_cols, dt_cols, bool_cols = split_feature_types_v2(
+        df,
+        target=config.target_column,
+        excluded=config.excluded_columns,
+    )
+    route_report = plan_categorical_routing(df, cat_cols, pp_cfg)
+
+    # bool_as_numeric=False 일 때 bool 은 범주로 합류 (UI 표시도 그 규칙을 반영).
+    effective_cat_cols = (
+        list(cat_cols) if pp_cfg.bool_as_numeric else [*cat_cols, *bool_cols]
+    )
+    effective_bool_cols = list(bool_cols) if pp_cfg.bool_as_numeric else []
+
+    feature_schema = build_feature_schema(
+        df,
+        num_cols,
+        effective_cat_cols,
+        config.target_column,
+        datetime_cols=dt_cols,
+        bool_cols=effective_bool_cols,
+        config=pp_cfg,
+        route_report=route_report,
+    )
+
+    # 입력 열 수: 타깃/제외 제외. datetime 은 decompose=False 면 드롭되지만 "입력 컬럼" 기준이라 포함.
+    n_cols_in = len(num_cols) + len(cat_cols) + len(dt_cols) + len(bool_cols)
+
+    # 출력 열 수: num(passthrough 1) + derived 목록 크기.
+    # - cat: onehot 분해 값 수, ordinal/frequency 는 1
+    # - datetime_decompose=True 면 파트 수만큼, False 면 0 (드롭)
+    # - bool_as_numeric=True 면 1, 아니면 위 effective_cat_cols 로 합류되어 cat 경로로 계산
+    n_cols_out = len(num_cols) + len(feature_schema.derived)
+
+    derived_tuples: tuple[tuple[str, str, str], ...] = tuple(
+        (d.source, d.name, d.kind) for d in feature_schema.derived
+    )
+
+    return FeaturePreviewDTO(
+        n_cols_in=n_cols_in,
+        n_cols_out=n_cols_out,
+        derived=derived_tuples,
+        encoding_summary=dict(route_report.encoding_per_col),
+        auto_downgraded=route_report.auto_downgraded,
+    )
+
+
 __all__ = [
-    "run_training",
     "get_training_result",
     "list_training_jobs",
+    "preview_preprocessing",
+    "run_training",
 ]

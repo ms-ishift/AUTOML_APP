@@ -1,19 +1,23 @@
-"""Training Service 단위/통합 테스트 (IMPLEMENTATION_PLAN §4.3).
+"""Training Service 단위/통합 테스트 (IMPLEMENTATION_PLAN §4.3 / §9.7).
 
 - 분류/회귀 각각 한 번씩 전체 파이프라인을 돌려 DB/파일 산출물을 검증.
 - 진행 콜백 호출 및 실패 경로 (데이터셋 없음, 타깃 컬럼 없음, 아티팩트 저장 실패)를 확인.
 - 개별 알고리즘 실패가 전체 실행을 중단시키지 않는지 부분 실패 경로도 검증.
+- §9.7: 고급 전처리 config forward / run_log summary / feature_engineering·balance stage /
+  번들 preprocessing_config.json 생성 여부 / preview_preprocessing 유스케이스.
 """
 
 from __future__ import annotations
 
 import shutil
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
-from ml.schemas import TrainingConfig
+from ml.schemas import PreprocessingConfig, TrainingConfig
 from repositories import (
     audit_repository,
     dataset_repository,
@@ -23,6 +27,7 @@ from repositories import (
 )
 from repositories.base import session_scope
 from services import training_service
+from services.dto import FeaturePreviewDTO
 from utils.errors import MLTrainingError, NotFoundError, StorageError, ValidationError
 
 # ------------------------------------------------------------------- helpers
@@ -342,3 +347,415 @@ def test_list_and_get_training_job(
 def test_get_training_result_missing_raises(tmp_storage: Path) -> None:
     with pytest.raises(NotFoundError):
         training_service.get_training_result(99999)
+
+
+# =========================================================== §9.7 Service 통합
+
+
+class TestPreprocessingForwarding:
+    """§9.7: run_training 이 config.preprocessing 를 ml 레이어로 forward 하는 경로."""
+
+    def test_default_config_emits_new_stages(
+        self,
+        classification_csv: Path,
+        tmp_storage: Path,
+        seeded_system_user: object,
+    ) -> None:
+        """기본 config 에서도 feature_engineering / balance stage 가 순서대로 emit 되어야 한다."""
+        _, dataset_id = _seed_project_and_dataset(classification_csv, tmp_storage)
+        stages: list[tuple[str, float]] = []
+        config = TrainingConfig(
+            dataset_id=dataset_id,
+            task_type="classification",
+            target_column="species",
+        )
+        training_service.run_training(
+            config, on_progress=lambda s, r: stages.append((s, r))
+        )
+        names = [s for s, _ in stages]
+        assert "feature_engineering" in names
+        assert "balance" in names
+        idx = {
+            n: names.index(n)
+            for n in ("preprocessing", "feature_engineering", "split", "balance")
+        }
+        assert idx["preprocessing"] < idx["feature_engineering"]
+        assert idx["feature_engineering"] < idx["split"]
+        assert idx["split"] < idx["balance"]
+        # balance 는 train:<algo> 보다 먼저
+        first_train_idx = next(i for i, n in enumerate(names) if n.startswith("train:"))
+        assert idx["balance"] < first_train_idx
+
+    def test_default_config_run_log_says_default(
+        self,
+        classification_csv: Path,
+        tmp_storage: Path,
+        seeded_system_user: object,
+    ) -> None:
+        _, dataset_id = _seed_project_and_dataset(classification_csv, tmp_storage)
+        config = TrainingConfig(
+            dataset_id=dataset_id,
+            task_type="classification",
+            target_column="species",
+        )
+        result = training_service.run_training(config)
+        with session_scope() as session:
+            job = training_repository.get(session, result.job_id)
+            assert job is not None
+            assert "preprocessing: default" in (job.run_log or "")
+
+    def test_custom_config_run_log_contains_summary(
+        self,
+        classification_csv: Path,
+        tmp_storage: Path,
+        seeded_system_user: object,
+    ) -> None:
+        """is_default=False 면 summary() 가 바뀐 축만 `key=value` 로 나열돼 run_log 에 기록된다."""
+        _, dataset_id = _seed_project_and_dataset(classification_csv, tmp_storage)
+        pp_cfg = PreprocessingConfig(numeric_scale="robust")
+        config = TrainingConfig(
+            dataset_id=dataset_id,
+            task_type="classification",
+            target_column="species",
+            preprocessing=pp_cfg,
+        )
+        result = training_service.run_training(config)
+        with session_scope() as session:
+            job = training_repository.get(session, result.job_id)
+            assert job is not None
+            run_log = job.run_log or ""
+            assert "preprocessing: numeric_scale=robust" in run_log
+            # default 문자열은 포함되지 말아야 함
+            assert "preprocessing: default" not in run_log
+
+    def test_custom_config_saves_preprocessing_json(
+        self,
+        classification_csv: Path,
+        tmp_storage: Path,
+        seeded_system_user: object,
+    ) -> None:
+        """is_default=False 일 때 각 모델 번들에 preprocessing_config.json 이 생성된다."""
+        _, dataset_id = _seed_project_and_dataset(classification_csv, tmp_storage)
+        pp_cfg = PreprocessingConfig(numeric_scale="robust")
+        config = TrainingConfig(
+            dataset_id=dataset_id,
+            task_type="classification",
+            target_column="species",
+            preprocessing=pp_cfg,
+        )
+        training_service.run_training(config)
+        models_dir = tmp_storage / "models"
+        saved_dirs = [d for d in models_dir.iterdir() if d.is_dir()]
+        assert saved_dirs
+        for d in saved_dirs:
+            assert (d / "preprocessing_config.json").exists(), (
+                f"preprocessing_config.json 미생성: {d}"
+            )
+
+    def test_default_config_skips_preprocessing_json(
+        self,
+        classification_csv: Path,
+        tmp_storage: Path,
+        seeded_system_user: object,
+    ) -> None:
+        """is_default=True 면 preprocessing_config.json 은 생성되지 않는다 (구 모델 바이트 동치)."""
+        _, dataset_id = _seed_project_and_dataset(classification_csv, tmp_storage)
+        config = TrainingConfig(
+            dataset_id=dataset_id,
+            task_type="classification",
+            target_column="species",
+        )
+        training_service.run_training(config)
+        models_dir = tmp_storage / "models"
+        saved_dirs = [d for d in models_dir.iterdir() if d.is_dir()]
+        assert saved_dirs
+        for d in saved_dirs:
+            assert not (d / "preprocessing_config.json").exists()
+
+    def test_regression_plus_smote_rejected_by_training_config(self) -> None:
+        """회귀 + SMOTE 는 TrainingConfig 생성 단계에서 거부되어야 한다 (§9.1 크로스 검증)."""
+        pp_cfg = PreprocessingConfig(imbalance="smote")
+        with pytest.raises(ValueError, match="SMOTE"):
+            TrainingConfig(
+                dataset_id=1,
+                task_type="regression",
+                target_column="y",
+                preprocessing=pp_cfg,
+            )
+
+    def test_custom_config_writes_preprocessing_customized_audit(
+        self,
+        classification_csv: Path,
+        tmp_storage: Path,
+        seeded_system_user: object,
+    ) -> None:
+        """§9.8: is_default=False 학습 시 AuditLog 에 training.preprocessing_customized 1회 기록."""
+        _, dataset_id = _seed_project_and_dataset(classification_csv, tmp_storage)
+        pp_cfg = PreprocessingConfig(numeric_scale="robust", imbalance="class_weight")
+        config = TrainingConfig(
+            dataset_id=dataset_id,
+            task_type="classification",
+            target_column="species",
+            preprocessing=pp_cfg,
+        )
+        result = training_service.run_training(config)
+
+        with session_scope() as session:
+            logs = audit_repository.list_logs(
+                session, action_type="training.preprocessing_customized"
+            )
+            job_logs = [
+                log
+                for log in logs
+                if log.target_type == "TrainingJob" and log.target_id == result.job_id
+            ]
+            assert len(job_logs) == 1
+            detail = job_logs[0].detail_json or {}
+            assert "summary" in detail
+            assert "numeric_scale=robust" in detail["summary"]
+            assert "imbalance=class_weight" in detail["summary"]
+
+    def test_default_config_skips_preprocessing_customized_audit(
+        self,
+        classification_csv: Path,
+        tmp_storage: Path,
+        seeded_system_user: object,
+    ) -> None:
+        """§9.8: 기본 config 학습 시 training.preprocessing_customized 는 기록되지 않아야 한다."""
+        _, dataset_id = _seed_project_and_dataset(classification_csv, tmp_storage)
+        config = TrainingConfig(
+            dataset_id=dataset_id,
+            task_type="classification",
+            target_column="species",
+        )
+        result = training_service.run_training(config)
+
+        with session_scope() as session:
+            logs = audit_repository.list_logs(
+                session, action_type="training.preprocessing_customized"
+            )
+            assert not [
+                log
+                for log in logs
+                if log.target_type == "TrainingJob" and log.target_id == result.job_id
+            ]
+
+
+class TestPreviewPreprocessing:
+    """§9.7: preview_preprocessing 읽기 전용 유스케이스."""
+
+    def test_default_classification_numeric_only(
+        self,
+        classification_csv: Path,
+        tmp_storage: Path,
+        seeded_system_user: object,
+    ) -> None:
+        """iris 유사 데이터(수치 4 + 타깃) / 기본 config → 파생 없음."""
+        _, dataset_id = _seed_project_and_dataset(classification_csv, tmp_storage)
+        config = TrainingConfig(
+            dataset_id=dataset_id,
+            task_type="classification",
+            target_column="species",
+        )
+        preview = training_service.preview_preprocessing(dataset_id, config)
+        assert isinstance(preview, FeaturePreviewDTO)
+        assert preview.n_cols_in == 4
+        assert preview.n_cols_out == 4
+        assert preview.derived == ()
+        assert preview.encoding_summary == {}
+        assert preview.auto_downgraded == ()
+
+    def test_high_cardinality_auto_downgrade(
+        self,
+        tmp_storage: Path,
+        seeded_system_user: object,
+        tmp_path: Path,
+    ) -> None:
+        """onehot + threshold=50 + auto_downgrade=True → 60 unique 컬럼은 frequency 로 강등."""
+        df = pd.DataFrame(
+            {
+                "x": list(range(120)),
+                "cat": [f"c{i % 60}" for i in range(120)],  # 60 unique
+                "y": [i % 2 for i in range(120)],
+            }
+        )
+        csv = tmp_path / "hc.csv"
+        df.to_csv(csv, index=False)
+        _, dataset_id = _seed_project_and_dataset(csv, tmp_storage)
+        config = TrainingConfig(
+            dataset_id=dataset_id,
+            task_type="classification",
+            target_column="y",
+            preprocessing=PreprocessingConfig(),
+        )
+        preview = training_service.preview_preprocessing(dataset_id, config)
+        assert "cat" in preview.auto_downgraded
+        assert preview.encoding_summary.get("cat") == "frequency"
+        # derived 에는 cat 이 단일 frequency 엔트리로 나열
+        kinds = {name for _, name, _ in preview.derived}
+        assert "cat" in kinds
+
+    def test_low_cardinality_onehot_expands_columns(
+        self,
+        tmp_storage: Path,
+        seeded_system_user: object,
+        tmp_path: Path,
+    ) -> None:
+        """저카디널리티 cat(3개 값) 은 onehot 으로 3개 파생 → n_cols_out > n_cols_in."""
+        df = pd.DataFrame(
+            {
+                "x": list(range(30)),
+                "cat": ["A", "B", "C"] * 10,
+                "y": [i % 2 for i in range(30)],
+            }
+        )
+        csv = tmp_path / "lc.csv"
+        df.to_csv(csv, index=False)
+        _, dataset_id = _seed_project_and_dataset(csv, tmp_storage)
+        config = TrainingConfig(
+            dataset_id=dataset_id,
+            task_type="classification",
+            target_column="y",
+            preprocessing=PreprocessingConfig(),
+        )
+        preview = training_service.preview_preprocessing(dataset_id, config)
+        assert preview.n_cols_in == 2  # x, cat
+        assert preview.n_cols_out == 1 + 3  # x + 3 onehot
+        assert preview.auto_downgraded == ()
+        # derived 에는 cat__A / cat__B / cat__C 가 나와야 한다
+        derived_names = {name for _, name, _ in preview.derived}
+        assert {"cat__A", "cat__B", "cat__C"} <= derived_names
+
+    def test_missing_dataset_raises(
+        self, tmp_storage: Path, seeded_system_user: object
+    ) -> None:
+        config = TrainingConfig(
+            dataset_id=99999,
+            task_type="classification",
+            target_column="y",
+        )
+        with pytest.raises(NotFoundError):
+            training_service.preview_preprocessing(99999, config)
+
+    def test_missing_target_raises(
+        self,
+        classification_csv: Path,
+        tmp_storage: Path,
+        seeded_system_user: object,
+    ) -> None:
+        _, dataset_id = _seed_project_and_dataset(classification_csv, tmp_storage)
+        config = TrainingConfig(
+            dataset_id=dataset_id,
+            task_type="classification",
+            target_column="does_not_exist",
+        )
+        with pytest.raises(ValidationError):
+            training_service.preview_preprocessing(dataset_id, config)
+
+    def test_missing_file_raises_storage_error(
+        self,
+        classification_csv: Path,
+        tmp_storage: Path,
+        seeded_system_user: object,
+    ) -> None:
+        _, dataset_id = _seed_project_and_dataset(classification_csv, tmp_storage)
+        with session_scope() as session:
+            ds = dataset_repository.get(session, dataset_id)
+            assert ds is not None
+            Path(ds.file_path).unlink()
+        config = TrainingConfig(
+            dataset_id=dataset_id,
+            task_type="classification",
+            target_column="species",
+        )
+        with pytest.raises(StorageError):
+            training_service.preview_preprocessing(dataset_id, config)
+
+    def test_bool_as_numeric_false_routes_bools_to_categorical(
+        self,
+        tmp_storage: Path,
+        seeded_system_user: object,
+        tmp_path: Path,
+    ) -> None:
+        """bool_as_numeric=False 면 bool 컬럼이 범주형 경로로 합류해 onehot 파생이 생긴다."""
+        df = pd.DataFrame(
+            {
+                "x": list(range(20)),
+                "flag": [True, False] * 10,  # native bool
+                "y": [i % 2 for i in range(20)],
+            }
+        )
+        csv = tmp_path / "bool.csv"
+        df.to_csv(csv, index=False)
+        _, dataset_id = _seed_project_and_dataset(csv, tmp_storage)
+        pp_cfg = PreprocessingConfig(bool_as_numeric=False)
+        config = TrainingConfig(
+            dataset_id=dataset_id,
+            task_type="classification",
+            target_column="y",
+            preprocessing=pp_cfg,
+        )
+        preview = training_service.preview_preprocessing(dataset_id, config)
+        # flag 가 onehot 으로 전개되어 파생 2개 (True/False)
+        flag_derived = [d for d in preview.derived if d[0] == "flag"]
+        assert len(flag_derived) == 2
+        assert all(d[2] == "onehot" for d in flag_derived)
+
+    def test_preview_does_not_create_training_job(
+        self,
+        classification_csv: Path,
+        tmp_storage: Path,
+        seeded_system_user: object,
+    ) -> None:
+        """preview 는 읽기 전용 — TrainingJob/Model 레코드를 만들지 않아야 한다."""
+        project_id, dataset_id = _seed_project_and_dataset(classification_csv, tmp_storage)
+        config = TrainingConfig(
+            dataset_id=dataset_id,
+            task_type="classification",
+            target_column="species",
+            preprocessing=PreprocessingConfig(numeric_scale="robust"),
+        )
+        training_service.preview_preprocessing(dataset_id, config)
+        jobs = training_service.list_training_jobs(project_id)
+        assert jobs == []
+
+    def test_replace_config_preprocessing_preserves_other_fields(self) -> None:
+        """dataclasses.replace 로 preprocessing 만 교체해도 나머지 필드가 유지됨 (DX 확인)."""
+        base = TrainingConfig(
+            dataset_id=1,
+            task_type="classification",
+            target_column="y",
+            test_size=0.3,
+        )
+        new = replace(base, preprocessing=PreprocessingConfig(numeric_scale="robust"))
+        assert new.dataset_id == 1
+        assert new.test_size == 0.3
+        assert new.preprocessing is not None
+        assert new.preprocessing.numeric_scale == "robust"
+
+
+class TestBalancerIntegration:
+    """§9.7: config.preprocessing.imbalance != 'none' 면 balancer 가 train_all 에 주입된다."""
+
+    def test_class_weight_strategy_trains_successfully(
+        self,
+        classification_csv: Path,
+        tmp_storage: Path,
+        seeded_system_user: object,
+    ) -> None:
+        """class_weight 전략으로도 전체 파이프라인이 성공하고 run_log 에 balance 기록이 남는다."""
+        _, dataset_id = _seed_project_and_dataset(classification_csv, tmp_storage)
+        pp_cfg = PreprocessingConfig(imbalance="class_weight")
+        config = TrainingConfig(
+            dataset_id=dataset_id,
+            task_type="classification",
+            target_column="species",
+            preprocessing=pp_cfg,
+        )
+        result = training_service.run_training(config)
+        assert result.best_algo is not None
+        with session_scope() as session:
+            job = training_repository.get(session, result.job_id)
+            assert job is not None
+            run_log = job.run_log or ""
+            assert "balance: strategy=class_weight" in run_log

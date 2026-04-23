@@ -1,4 +1,4 @@
-"""학습 실행 (IMPLEMENTATION_PLAN §3.5, FR-061, FR-063, NFR-004).
+"""학습 실행 (IMPLEMENTATION_PLAN §3.5 / §9.6, FR-061, FR-063, FR-057, NFR-004).
 
 설계:
 - ``split_dataset`` 는 분류일 때 ``stratify=y`` 적용. random_state 는 settings.RANDOM_SEED.
@@ -7,6 +7,16 @@
   - 개별 알고리즘 실패는 ``TrainedModel(status='failed')`` 로 기록하고 전체 중단 없음.
   - 학습 시간(ms)을 측정해 함께 저장.
 - ``TrainedModel`` 은 메모리 전용 구조. 직렬화는 §3.7 artifacts 에서 Pipeline 전체를 joblib 으로.
+
+§9.6 확장 (FR-057):
+- ``train_all`` 에 `preprocess_cfg`, `balancer` 키워드 인자 추가.
+  - 인자 생략 시 기존 동작과 완전히 동일 (테스트 회귀 0).
+  - ``balancer(estimator, X_train, y_train) -> (estimator, X_train, y_train)`` 는 각 spec
+    의 fresh estimator 에 대해 fit 직전에 호출된다 (class_weight 설정, SMOTE 리샘플 등).
+    **호출자 책임**: balancer 에 전달되는 ``X_train/y_train`` 은 반드시 train split 이후
+    데이터여야 한다 (테스트 세트 리샘플링 금지 — §9.5 docstring 참조).
+  - ``preprocess_cfg`` 는 현재 구현에서 직접 분기에 쓰이지 않고, 메타데이터/미래 확장용
+    으로 예약된다 (caller 가 이미 preprocessor 와 balancer 를 구성해서 넘기기 때문).
 """
 
 from __future__ import annotations
@@ -29,8 +39,14 @@ if TYPE_CHECKING:
     from sklearn.compose import ColumnTransformer
 
     from ml.registry import AlgoSpec
+    from ml.schemas import PreprocessingConfig
 
     ProgressCallback = Callable[[int, int, str, Literal["success", "failed"]], None]
+    # (estimator, X_train, y_train) -> (estimator, X_train, y_train)
+    BalancerCallable = Callable[
+        [Any, "pd.DataFrame", "pd.Series"],
+        tuple[Any, "pd.DataFrame", "pd.Series"],
+    ]
 
 
 TrainedStatus = Literal["success", "failed"]
@@ -96,19 +112,33 @@ def train_all(
     y_train: pd.Series,
     *,
     on_progress: ProgressCallback | None = None,
+    preprocess_cfg: PreprocessingConfig | None = None,  # noqa: ARG001 — §9.6 예약
+    balancer: BalancerCallable | None = None,
 ) -> list[TrainedModel]:
     """주어진 스펙을 순회해 각각 학습. 개별 실패는 ``TrainedModel(status='failed')`` 로 기록.
 
     ``on_progress(index, total, algo_name, status)`` 콜백으로 진행률을 외부에 보고할 수 있다.
     (§4.3 - Streamlit rerun 모델 호환을 위해 동기 콜백)
+
+    §9.6 추가:
+    - ``balancer`` 가 주어지면 spec 별 fresh estimator 에 대해 fit 직전에 호출.
+      반환값 ``(estimator, X_use, y_use)`` 로 해당 pipeline 학습.
+      balancer 호출 실패는 해당 spec 의 학습 실패로 격리 (기존 실패 격리 정책 유지).
+    - ``preprocess_cfg`` 는 메타데이터/미래 확장용 예약 파라미터 (현재 분기에는 사용 안 함,
+      호출자가 이미 preprocessor/balancer 를 구성해서 전달하는 책임 분리 구조).
     """
     results: list[TrainedModel] = []
     total = len(specs)
     for idx, spec in enumerate(specs):
         start = time.perf_counter()
         try:
-            pipeline = _build_pipeline(preprocessor, spec.factory())
-            pipeline.fit(X_train, y_train)
+            estimator = spec.factory()
+            X_use: pd.DataFrame = X_train
+            y_use: pd.Series = y_train
+            if balancer is not None:
+                estimator, X_use, y_use = balancer(estimator, X_train, y_train)
+            pipeline = _build_pipeline(preprocessor, estimator)
+            pipeline.fit(X_use, y_use)
             elapsed = int((time.perf_counter() - start) * 1000)
             results.append(
                 TrainedModel(
