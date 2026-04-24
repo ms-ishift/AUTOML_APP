@@ -47,7 +47,7 @@ from ml.preprocess import (
     split_feature_types,
     split_feature_types_v2,
 )
-from ml.registry import AlgoSpec, get_specs
+from ml.registry import AlgoSpec, get_specs, optional_backends_status
 from ml.schemas import PreprocessingConfig
 from ml.trainers import split_dataset, train_all
 from repositories import (
@@ -58,8 +58,10 @@ from repositories import (
 )
 from repositories.base import session_scope
 from services.dto import (
+    AlgorithmInfoDTO,
     FeaturePreviewDTO,
     ModelComparisonRowDTO,
+    OptionalBackendInfoDTO,
     TrainingJobDTO,
     TrainingResultDTO,
 )
@@ -838,8 +840,73 @@ def preview_preprocessing(
     )
 
 
+# --------------------------------------------------- §10.4 Algorithm discovery
+
+
+def list_optional_backends() -> list[OptionalBackendInfoDTO]:
+    """FR-069: Optional backend(xgboost/lightgbm/catboost) 가용 상태 목록.
+
+    UI 가 `ml.registry` 를 직접 import 하지 않도록 하기 위한 얇은 래퍼.
+    조회 순서는 등록 시도 순서 (xgboost → lightgbm → catboost).
+    """
+    return [
+        OptionalBackendInfoDTO(name=s.name, available=s.available, reason=s.reason)
+        for s in optional_backends_status()
+    ]
+
+
+def list_algorithms(task_type: str) -> list[AlgorithmInfoDTO]:
+    """FR-067: 지정된 task 의 학습 후보 알고리즘 목록.
+
+    - 현재 등록된 모든 스펙(= 가용 스펙)을 ``available=True`` 로 노출.
+    - **미설치 optional backend** 는 같은 task 에 대한 "가상 스펙" 으로
+      ``available=False`` + 사유(`unavailable_reason`) 와 함께 포함해 UI 가
+      "왜 후보에 없는지" 를 표시할 수 있게 한다.
+    - 반환 순서: 가용 스펙 → 미설치 optional 백엔드. 가용 스펙 내부 순서는
+      registry 등록 순서를 그대로 보존(훈련 경로와 동일).
+    """
+    if task_type not in ("classification", "regression"):
+        raise ValidationError(
+            f"task_type 은 classification/regression 중 하나여야 합니다: {task_type}"
+        )
+
+    result: list[AlgorithmInfoDTO] = []
+    registered_names = set()
+    for spec in get_specs(task_type):  # type: ignore[arg-type]
+        registered_names.add(spec.name)
+        result.append(
+            AlgorithmInfoDTO(
+                name=spec.name,
+                task_type=task_type,
+                default_metric=spec.default_metric,
+                is_optional_backend=spec.is_optional_backend,
+                available=True,
+                unavailable_reason="",
+            )
+        )
+
+    # 미설치 optional backend 는 task 무관하게 unavailable 로 노출.
+    for backend in optional_backends_status():
+        if backend.available or backend.name in registered_names:
+            continue
+        result.append(
+            AlgorithmInfoDTO(
+                name=backend.name,
+                task_type=task_type,
+                default_metric="",
+                is_optional_backend=True,
+                available=False,
+                unavailable_reason=backend.reason,
+            )
+        )
+
+    return result
+
+
 __all__ = [
     "get_training_result",
+    "list_algorithms",
+    "list_optional_backends",
     "list_training_jobs",
     "preview_preprocessing",
     "run_training",

@@ -367,3 +367,34 @@ class FeaturePreviewDTO:
     derived: tuple[tuple[str, str, str], ...] = ()
     encoding_summary: dict[str, str] = field(default_factory=dict)
     auto_downgraded: tuple[str, ...] = ()
+
+
+# --------------------------------------------------------- Algorithm registry
+
+
+@dataclass(frozen=True, slots=True)
+class AlgorithmInfoDTO:
+    """학습 페이지가 소비하는 알고리즘 후보 1건 (§10.4, FR-067).
+
+    - ``available=False`` 이면 ``unavailable_reason`` 에 사용자 복구 힌트가 담긴다
+      (예: "패키지 미설치 (pip install 필요)", "libomp 미설치 ...").
+      이런 항목은 UI 선택지에 **disabled** 로 노출되거나 목록에서 제외된다.
+    - ``is_optional_backend`` 가 True 인 알고리즘은 특별한 caption/설치 안내를
+      붙이는 분기점.
+    """
+
+    name: str
+    task_type: str  # "classification" | "regression"
+    default_metric: str
+    is_optional_backend: bool = False
+    available: bool = True
+    unavailable_reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class OptionalBackendInfoDTO:
+    """Optional backend(XGBoost/LightGBM/CatBoost) 가용 상태 1건 (§10.4, FR-069)."""
+
+    name: str
+    available: bool
+    reason: str = ""

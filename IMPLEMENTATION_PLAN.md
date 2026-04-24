@@ -1012,11 +1012,11 @@ FR-100 으로 편입.
 
 ### 10.4 서비스 API · DTO — FR-067
 
-- [ ] `services/dto.py` 에 `AlgorithmInfoDTO(name, task_type, default_metric, is_optional_backend, available, unavailable_reason)` + `OptionalBackendInfoDTO(name, available, reason)` 추가.
-- [ ] `services/training_service.py::list_algorithms(task_type) -> tuple[AlgorithmInfoDTO, ...]` 신설.
+- [x] `services/dto.py` 에 `AlgorithmInfoDTO(name, task_type, default_metric, is_optional_backend, available, unavailable_reason)` + `OptionalBackendInfoDTO(name, available, reason)` 추가.
+- [x] `services/training_service.py::list_algorithms(task_type) -> list[AlgorithmInfoDTO]` 신설.
   - 등록된 specs + `optional_backends_status()` 를 조합. skip 된 backend 도 `available=False` 로 리스트에 포함(UI 표시용).
-- [ ] `services/training_service.py::list_optional_backends() -> tuple[OptionalBackendInfoDTO, ...]` 신설.
-- [ ] UI 가 `ml.registry` 를 직접 import 하지 않도록 경계 유지(레이어 규칙 준수).
+- [x] `services/training_service.py::list_optional_backends() -> list[OptionalBackendInfoDTO]` 신설.
+- [x] UI 가 `ml.registry` 를 직접 import 하지 않도록 경계 유지(레이어 규칙 준수).
 
 ### 10.5 UI — `pages/03_training.py` (FR-067)
 

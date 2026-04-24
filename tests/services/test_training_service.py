@@ -27,7 +27,7 @@ from repositories import (
 )
 from repositories.base import session_scope
 from services import training_service
-from services.dto import FeaturePreviewDTO
+from services.dto import AlgorithmInfoDTO, FeaturePreviewDTO, OptionalBackendInfoDTO
 from utils.errors import MLTrainingError, NotFoundError, StorageError, ValidationError
 
 # ------------------------------------------------------------------- helpers
@@ -890,3 +890,72 @@ class TestBalancerIntegration:
             assert job is not None
             run_log = job.run_log or ""
             assert "balance: strategy=class_weight" in run_log
+
+
+class TestAlgorithmDiscovery:
+    """§10.4 (FR-067, FR-069): list_algorithms / list_optional_backends."""
+
+    def test_list_algorithms_returns_classification_specs(self) -> None:
+        infos = training_service.list_algorithms("classification")
+        assert infos, "분류 후보가 최소 1건 있어야 한다"
+        assert all(isinstance(i, AlgorithmInfoDTO) for i in infos)
+        assert all(i.task_type == "classification" for i in infos)
+        # 레이어 경계: registry 를 직접 import 하지 않고도 이름이 노출돼야 한다.
+        names = {i.name for i in infos if i.available}
+        assert "random_forest" in names
+        assert "logistic_regression" in names
+
+    def test_list_algorithms_returns_regression_specs(self) -> None:
+        infos = training_service.list_algorithms("regression")
+        names = {i.name for i in infos if i.available}
+        assert "linear" in names
+        # §10.1 신규
+        assert "elastic_net" in names
+
+    def test_list_algorithms_rejects_unknown_task(self) -> None:
+        with pytest.raises(ValidationError):
+            training_service.list_algorithms("clustering")
+
+    def test_list_algorithms_marks_optional_backend_flag(self) -> None:
+        """등록된 스펙 중 optional backend 는 is_optional_backend=True."""
+        infos = training_service.list_algorithms("classification")
+        for info in infos:
+            if info.name in {"xgboost", "lightgbm", "catboost"}:
+                assert info.is_optional_backend is True, info.name
+            else:
+                assert info.is_optional_backend is False, info.name
+
+    def test_list_algorithms_includes_unavailable_optional_with_reason(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """미설치 optional backend 도 리스트에 나타나며 사유가 붙는다."""
+        from ml.registry import OptionalBackendStatus
+
+        fake_status = [
+            OptionalBackendStatus(name="xgboost", available=True),
+            OptionalBackendStatus(name="lightgbm", available=True),
+            OptionalBackendStatus(
+                name="catboost",
+                available=False,
+                reason="패키지 미설치 (pip install 필요)",
+            ),
+        ]
+        monkeypatch.setattr(
+            "services.training_service.optional_backends_status", lambda: fake_status
+        )
+
+        infos = training_service.list_algorithms("classification")
+        by_name = {i.name: i for i in infos}
+        # catboost 가 (실제 등록 여부와 무관하게) unavailable 항목으로 노출
+        if "catboost" in by_name and not by_name["catboost"].available:
+            assert "pip install" in by_name["catboost"].unavailable_reason
+
+    def test_list_optional_backends_returns_three(self) -> None:
+        infos = training_service.list_optional_backends()
+        assert [i.name for i in infos] == ["xgboost", "lightgbm", "catboost"]
+        assert all(isinstance(i, OptionalBackendInfoDTO) for i in infos)
+        for info in infos:
+            if info.available:
+                assert info.reason == ""
+            else:
+                assert info.reason
