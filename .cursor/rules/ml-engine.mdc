@@ -54,26 +54,43 @@ def build_preprocessor(num_cols: list[str], cat_cols: list[str]) -> Pipeline:
 - 고카디널리티 자동 강등 결정은 `plan_categorical_routing(df_sample, cat_cols, config) -> PreprocessingRouteReport` 로 독립 함수화하고, 결과를 `ColumnTransformer._route_report_` 커스텀 속성으로 부착해 UI 미리보기(§9.9) 가 소비한다.
 - `imblearn` 은 **선택 의존**. `SMOTE_AVAILABLE` 플래그로 가드하고, 미설치 + `imbalance="smote"` 는 `MLTrainingError` 승격. 다른 전략은 `imblearn` 없이도 동작해야 한다.
 
-## 알고리즘 레지스트리 (registry.py)
+## 알고리즘 레지스트리 (registry.py) — FR-062/FR-067~069 (§10)
 
 신규 알고리즘은 Spec 추가로만 등록 (OCP).
 
 ```python
-from dataclasses import dataclass
-from typing import Callable, Any
+from dataclasses import dataclass, field
+from typing import Callable, Any, Mapping
 
 @dataclass(frozen=True)
 class AlgoSpec:
     name: str
-    factory: Callable[[], Any]       # estimator 생성자
-    task: str                         # "classification" | "regression"
-
-CLASSIFIERS: dict[str, AlgoSpec] = {
-    "logistic_regression": AlgoSpec("logistic_regression", lambda: LogisticRegression(max_iter=1000), "classification"),
-    "random_forest":       AlgoSpec("random_forest",       lambda: RandomForestClassifier(), "classification"),
-    # ...
-}
+    factory: Callable[[], Any]                       # estimator 생성자
+    task_type: str                                    # "classification" | "regression"
+    default_metric: str
+    is_optional_backend: bool = False                 # XGB/LGBM/CatBoost 등 선택 의존
+    param_grid: Mapping[str, tuple[Any, ...]] | None = field(default=None)  # §11 튜닝 슬롯
 ```
+
+### 필수 vs. 선택적 백엔드
+
+- 필수 의존(항상 사용 가능): Core(`logistic_regression`, `decision_tree`, `random_forest`, 회귀 `linear/ridge/lasso/rf`), Tier 1(sklearn 내장: `hist_gradient_boosting`, `extra_trees`, `gradient_boosting`, `kneighbors`, 회귀는 `elastic_net`, `decision_tree_regressor` 추가).
+- 선택 의존(`is_optional_backend=True`): `xgboost`, `lightgbm`, `catboost`. import 실패 시 **레지스트리 로드 시점**에 자동 제외하고 `_OPTIONAL_BACKEND_STATUS` 캐시에 `(name, available=False, reason)` 기록.
+- CatBoost 는 `requirements-optional.txt` 분리. 기본 `pip install -r requirements.txt` 로 CI/개발 환경에 포함되지 않음.
+- task 당 `name` 은 unique. `_assert_unique_names()` 가 로드 시점에 강제한다.
+
+### UI 경유 규약 (레이어 경계)
+
+- `pages/*` 는 `ml.registry` 를 **직접 import 금지**. 반드시 `services/training_service` 의 다음 API 사용:
+  - `list_algorithms(task_type) -> list[AlgorithmInfoDTO]` — 사용 가능/불가 항목 + 사유.
+  - `list_optional_backends() -> list[OptionalBackendInfoDTO]` — 선택 백엔드 전반의 설치 상태.
+- 사용자 부분 선택은 `TrainingConfig.algorithms: tuple[str, ...] | None` 로 전달. `None` ⇔ "사용 가능한 전체" 와 **바이트 동치**. 부분 선택만 `Event.TRAINING_ALGORITHMS_FILTERED` 감사.
+
+### 하이퍼파라미터 튜닝 (§11 스키마 슬롯)
+
+- `AlgoSpec.param_grid` 는 **Tier 1 신규 6종에 한해 우선 채움**. Core/optional 은 후속 이터레이션.
+- `TrainingConfig.tuning: TuningConfig | None`. `TuningConfig.method in {"none","grid","halving"}` 이며 현재는 `"none"` 만 실제 동작. 그 외 값은 `run_training` 진입 시 `training.tuning_downgraded` 이벤트 발행 + 단일 fit 으로 fallback.
+- **튜닝 실제 구현은 아직 하지 않는다** — 스키마는 먼저 열어두어 downstream (service/UI/artifact) 변경 없이 구현만 교체되도록 한다.
 
 ## 학습 (trainers.py)
 

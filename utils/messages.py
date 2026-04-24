@@ -49,7 +49,9 @@ class Msg:
     PREPROCESSING_ADVANCED_TITLE = "고급 전처리 (선택)"
     PREPROCESSING_CUSTOM_BADGE = "⚙️ 커스텀 전처리 적용됨"
     PREPROCESSING_PREVIEW_TITLE = "피처 변환 미리보기"
-    PREPROCESSING_PREVIEW_HINT = "아래 설정을 고정한 상태에서 미리 계산됩니다 (실제 학습은 수행하지 않음)."
+    PREPROCESSING_PREVIEW_HINT = (
+        "아래 설정을 고정한 상태에서 미리 계산됩니다 (실제 학습은 수행하지 않음)."
+    )
     PREPROCESSING_SMOTE_UNAVAILABLE = (
         "imbalanced-learn 이 설치되지 않아 SMOTE 를 사용할 수 없습니다."
     )
@@ -57,6 +59,12 @@ class Msg:
     PREPROCESSING_PREVIEW_AUTO_DOWNGRADED = (
         "고카디널리티로 판단되어 자동으로 frequency 인코딩으로 강등된 컬럼이 있습니다."
     )
+
+    # 알고리즘 선택 (FR-067~069, §10.5)
+    ALGORITHM_SELECT_TITLE = "🧪 알고리즘 선택 (선택)"
+    ALGORITHM_CUSTOM_BADGE = "🧪 커스텀 알고리즘 후보 적용됨"
+    ALGORITHM_BACKEND_UNAVAILABLE = "선택 불가 — 설치 필요"
+    ALGORITHM_REQUIRE_AT_LEAST_ONE = "최소 1개 알고리즘을 선택해야 합니다."
 
     # 모델 (FR-070~075)
     MODEL_SAVED = "모델이 저장되었습니다."

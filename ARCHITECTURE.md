@@ -206,22 +206,36 @@ returns PredictionResultDTO (rows: list[dict], result_path, warnings: list[str])
 
 ## 6. ML 엔진 설계
 
-### 6.1 알고리즘 레지스트리 (`ml/registry.py`)
+### 6.1 알고리즘 레지스트리 (`ml/registry.py`) — FR-062/FR-067~069
 
 ```python
-# 의사 구조
+# 의사 구조 (v0.3.0, §10 이후)
 CLASSIFIERS = {
-    "logistic_regression": LogisticRegressionSpec(...),
-    "decision_tree":       DecisionTreeSpec(...),
-    "random_forest":       RandomForestSpec(...),
-    "xgboost":             XGBClassifierSpec(...),   # 선택
-    "lightgbm":            LGBMClassifierSpec(...),  # 선택
+    # Core (필수 의존)
+    "logistic_regression":     LogisticRegressionSpec(...),
+    "decision_tree":           DecisionTreeSpec(...),
+    "random_forest":           RandomForestSpec(...),
+    # Tier 1 (sklearn 내장, 필수 의존, §10.1 신규)
+    "hist_gradient_boosting":  HistGradientBoostingSpec(..., param_grid=...),
+    "extra_trees":             ExtraTreesSpec(..., param_grid=...),
+    "gradient_boosting":       GradientBoostingSpec(..., param_grid=...),
+    "kneighbors":              KNeighborsSpec(..., param_grid=...),
+    # Optional backend (선택 의존, import 실패 시 자동 제외)
+    "xgboost":   XGBClassifierSpec(..., is_optional_backend=True),
+    "lightgbm":  LGBMClassifierSpec(..., is_optional_backend=True),
+    "catboost":  CatBoostSpec(..., is_optional_backend=True),  # requirements-optional.txt
 }
-REGRESSORS = { ... }  # linear, ridge, lasso, rf, xgb/lgbm
+REGRESSORS = { ... }  # linear, ridge, lasso, rf + Tier1(hist_gbm/extra_trees/gbm/knn/elastic_net/decision_tree) + optional(xgb/lgbm/catboost)
 ```
 
-- 신규 알고리즘 추가는 Spec 1개 등록만으로 완료되어야 한다 (OCP).
-- Spec은 `name, estimator_factory(), default_params, supports_task`를 노출한다.
+- `AlgoSpec` 필드: `name, estimator_factory(), default_params, task_type, default_metric, is_optional_backend, param_grid`.
+- 신규 알고리즘 추가는 **Spec 1개 등록만으로 완료** (OCP).
+- `param_grid` 는 §11(하이퍼파라미터 튜닝) 을 위한 **스키마 슬롯**. `TrainingConfig.tuning.method="none"` 이 기본이며 그 외 값은 `training.tuning_downgraded` 이벤트 후 단일 fit 으로 fallback.
+- 선택적 백엔드의 import 가드는 **레지스트리 로드 시 1회** 수행되며 `_OPTIONAL_BACKEND_STATUS` 에 `(name, available, reason)` 형태로 캐시된다.
+- UI(`pages/*`)는 `ml/registry` 를 **직접 import 하지 않는다**. 반드시 `services/training_service` 의 다음 API 를 경유한다:
+  - `list_algorithms(task_type) -> list[AlgorithmInfoDTO]` — 사용 가능/불가 전체 목록과 사유
+  - `list_optional_backends() -> list[OptionalBackendInfoDTO]` — XGB/LGBM/CatBoost 상태 요약
+- 사용자 선택 반영 흐름: UI multiselect → `TrainingConfig.algorithms: tuple[str, ...] | None` → `run_training._apply_algorithm_filter()` → 부분 선택 시 `Event.TRAINING_ALGORITHMS_FILTERED` 감사 로그. `algorithms=None` 이면 "사용 가능한 전체" 와 **바이트 동치** (기존 v0.2.0 이하 감사 로그 미발생).
 
 ### 6.2 전처리 (`ml/preprocess.py` + `ml/feature_engineering.py` + `ml/balancing.py`)
 

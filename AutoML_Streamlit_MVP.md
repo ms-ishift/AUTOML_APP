@@ -316,6 +316,23 @@ MVP 단계에서는 아래 목표를 달성한다.
 ### FR-066 실패 처리
 - 학습 실패 시 사용자에게 실패 원인과 점검 포인트를 표시해야 한다.
 
+### FR-067 알고리즘 선택 (사용자 제어)
+- 사용자는 학습 실행 전에 지원 알고리즘 목록(FR-062 확장) 중 원하는 부분집합을 체크박스(`st.multiselect`)로 선택할 수 있어야 한다.
+- 선택을 변경하지 않으면 "사용 가능한 전체 알고리즘"이 기본값이며, 이 경우 v0.2.0 이전 동작과 완전히 동일해야 한다 (감사 로그 미발생).
+- 최소 1개 이상이 선택되어야 학습을 시작할 수 있다. 0개 선택 시 UI 경고 후 학습을 차단해야 한다.
+- 부분 선택이 이루어진 경우 `TrainingJob.run_log` 및 감사 로그 `training.algorithms_filtered` 에 선택된 알고리즘 목록이 기록되어야 한다.
+- 문제 유형 변경(`classification` ↔ `regression`) 시 해당 task 에서 유효하지 않은 선택 항목은 자동으로 제거되어야 한다.
+
+### FR-068 확장 알고리즘 지원
+- 분류 지원: Logistic Regression, Random Forest, Decision Tree, XGBoost, LightGBM, **Hist Gradient Boosting, Extra Trees, Gradient Boosting, K-Nearest Neighbors**, (CatBoost: optional)
+- 회귀 지원: Linear Regression, Random Forest Regressor, Ridge, Lasso, XGBoost Regressor, LightGBM Regressor, **Hist Gradient Boosting Regressor, Extra Trees Regressor, Gradient Boosting Regressor, K-Nearest Neighbors Regressor, ElasticNet, Decision Tree Regressor**, (CatBoost Regressor: optional)
+- Tier 1 신규 알고리즘은 sklearn 내장 기반이며 필수 의존성이므로 CI/기본 환경에서 항상 사용 가능하다.
+
+### FR-069 선택적 백엔드 (Optional Backend)
+- CatBoost 는 선택적 백엔드로 제공되며, `requirements-optional.txt` 에 분리 기재한다 (기본 CI/설치에 포함되지 않는다).
+- 선택적 백엔드(XGBoost, LightGBM, CatBoost)는 import 실패 시 학습 대상에서 자동 제외되며, UI 는 `training_service.list_optional_backends()` 로부터 상태와 사용자 행동 가능한 사유(예: "pip install required", "libomp 누락")를 받아 캡션으로 표시해야 한다.
+- UI(`pages/*`)는 `ml/registry` 를 직접 import 하지 않고, 반드시 `services/training_service` 의 `list_algorithms(task_type)` / `list_optional_backends()` API 를 경유해야 한다 (레이어 경계).
+
 ---
 
 ## 6.8 결과 비교 및 모델 관리

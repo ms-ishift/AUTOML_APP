@@ -35,7 +35,6 @@ from ml.evaluators import (
     REGRESSION_METRICS,
 )
 from ml.feature_engineering import DEFAULT_DATETIME_PARTS
-from ml.registry import optional_backends_status
 from ml.schemas import PreprocessingConfig, TrainingConfig
 from pages.components.data_preview import render_profile
 from pages.components.help import render_help
@@ -88,6 +87,9 @@ PP_IMBALANCE_KEY: Final[str] = "pp_imbalance"
 PP_SMOTE_K_KEY: Final[str] = "pp_smote_k_neighbors"
 PP_PREVIEW_BTN_KEY: Final[str] = "pp_preview_btn"
 PP_PREVIEW_RESULT_KEY: Final[str] = "pp_preview_result"
+
+# 알고리즘 선택 위젯 key (§10.5, FR-067)
+ALGO_SELECTED_KEY: Final[str] = "training_selected_algorithms"
 
 # 전처리 옵션 튜플 (ml.schemas.Literal 과 키 1:1 대응)
 _NUM_IMPUTE_OPTIONS: Final[tuple[str, ...]] = (
@@ -158,12 +160,13 @@ def _describe_metric(metric_key: str) -> str:
 
 
 def _render_optional_backend_notice() -> None:
-    """xgboost / lightgbm 이 런타임 누락으로 스킵됐다면 사용자에게 사유를 한번 고지한다.
+    """xgboost / lightgbm / catboost 가 런타임 누락으로 스킵됐다면 사유를 고지한다.
 
     조용히 후보에서 빠지면 "왜 성능 좋은 모델이 후보에 없지?" 혼란이 생기므로,
-    `ml.registry.optional_backends_status()` 결과를 읽어 `st.info` 로 노출한다.
+    ``training_service.list_optional_backends()`` 결과를 읽어 ``st.info`` 로 노출한다.
+    UI 는 ``ml.registry`` 를 직접 import 하지 않는다 (§10.4 레이어 경계).
     """
-    skipped = [s for s in optional_backends_status() if not s.available]
+    skipped = [s for s in training_service.list_optional_backends() if not s.available]
     if not skipped:
         return
     lines = [f"- **{s.name}** — {s.reason}" for s in skipped]
@@ -456,6 +459,74 @@ def _handle_preview_click(task_type: str, dataset_id: int) -> None:
         set_state(PP_PREVIEW_RESULT_KEY, None)
 
 
+def _normalize_selected_algorithms(available_names: list[str], task_type: str) -> list[str]:
+    """§10.5: session_state 에서 읽은 선택값을 정규화.
+
+    - 현재 가용 알고리즘 집합 바깥의 이름(= 과거 task 잔존값) 은 제거.
+    - 초기 상태(키 부재 또는 None) 는 "전체 선택" (= 전체 가용 이름).
+    """
+    session_key = f"{ALGO_SELECTED_KEY}::{task_type}"
+    raw = st.session_state.get(session_key)
+    if raw is None:
+        return list(available_names)
+    filtered = [n for n in raw if n in available_names]
+    # 값이 변했으면 세션 동기화 (stale 값 영구 제거).
+    if filtered != raw:
+        st.session_state[session_key] = filtered
+    return filtered
+
+
+def _render_algorithm_selection_expander(task_type: str) -> tuple[str, ...] | None:
+    """§10.5 (FR-067): 알고리즘 후보 선택 expander.
+
+    반환값::
+
+        None          → TrainingConfig.algorithms=None (전체 선택 = v0.2.0 동치)
+        tuple[str,..] → 사용자가 부분집합을 선택 (정렬된 튜플)
+
+    UI 는 ``ml.registry`` 를 직접 import 하지 않고 ``training_service`` 의
+    ``list_algorithms`` / ``list_optional_backends`` 만 사용한다.
+    """
+    infos = training_service.list_algorithms(task_type)
+    available = [i for i in infos if i.available]
+    available_names = [i.name for i in available]
+    # session_state 정규화 (task 전환 시 상대 task 이름 제거 등)
+    session_key = f"{ALGO_SELECTED_KEY}::{task_type}"
+    current = _normalize_selected_algorithms(available_names, task_type)
+
+    is_custom = set(current) != set(available_names)
+    expander_label = Msg.ALGORITHM_SELECT_TITLE
+    if is_custom:
+        expander_label = f"{expander_label} · {Msg.ALGORITHM_CUSTOM_BADGE}"
+
+    with st.expander(expander_label, expanded=False):
+        selected = st.multiselect(
+            f"학습 후보 ({len(available_names)}개 가용)",
+            options=available_names,
+            default=current,
+            key=session_key,
+        )
+
+        # 선택 개수 요약
+        if not selected:
+            st.warning(Msg.ALGORITHM_REQUIRE_AT_LEAST_ONE)
+        else:
+            st.caption(f"선택: {len(selected)} / 가용: {len(available_names)}")
+
+        # 비가용 optional backend 상태 별도 caption (설치 복구 힌트)
+        unavailable_optional = [i for i in infos if not i.available]
+        if unavailable_optional:
+            st.caption(Msg.ALGORITHM_BACKEND_UNAVAILABLE)
+            for info in unavailable_optional:
+                st.caption(f"• **{info.name}** — {info.unavailable_reason}")
+
+    if not selected:
+        return ()  # 잘못된 선택 — TrainingConfig 생성에서 차단됨.
+    if set(selected) == set(available_names):
+        return None  # 전체 선택 → None 으로 정규화 (byte/audit 하위호환)
+    return tuple(sorted(selected))
+
+
 def _render_advanced_preprocessing_expander(
     task_type: str, dataset_id: int
 ) -> PreprocessingConfig | None:
@@ -553,6 +624,12 @@ def _render_config_form(
         key=FORM_JOB_NAME_KEY,
     )
 
+    # §10.5: 알고리즘 후보 선택 expander (고급 전처리 위에 위치).
+    selected_algorithms = _render_algorithm_selection_expander(str(task_type))
+    if selected_algorithms is not None and len(selected_algorithms) > 0:
+        # 부분 선택 상태일 때만 뱃지 노출 (전체 선택 = None 으로 숨김).
+        st.caption(Msg.ALGORITHM_CUSTOM_BADGE)
+
     # §9.9: 고급 전처리 expander + 미리보기.
     pp_cfg = _render_advanced_preprocessing_expander(str(task_type), dataset_id)
     if pp_cfg is not None and not pp_cfg.is_default:
@@ -567,6 +644,12 @@ def _render_config_form(
         st.rerun()
         return None
 
+    # §10.5: 빈 선택 → 실행 차단 (TrainingConfig 가 raise 하기 전에 UX 피드백 우선).
+    if selected_algorithms is not None and len(selected_algorithms) == 0:
+        flash("error", Msg.ALGORITHM_REQUIRE_AT_LEAST_ONE)
+        st.rerun()
+        return None
+
     try:
         return TrainingConfig(
             dataset_id=int(st.session_state["training_dataset_pick"]),
@@ -577,6 +660,7 @@ def _render_config_form(
             metric_key=str(metric_key),
             job_name=job_name.strip() or None,
             preprocessing=pp_cfg if not pp_cfg.is_default else None,
+            algorithms=selected_algorithms,
         )
     except ValueError as err:
         flash("error", str(err))

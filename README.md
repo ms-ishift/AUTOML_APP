@@ -115,7 +115,7 @@ services/*  ──▶ repositories/*  ──▶ SQLite / Postgres
 | `app.py` | 홈 · DB 상태 · 전역 사이드바 | FR-001~003 |
 | `pages/01_projects.py` | 프로젝트 생성/선택/수정/삭제 | FR-010~019 |
 | `pages/02_dataset_upload.py` | 업로드 · 미리보기 · 프로파일 | FR-030~036 |
-| `pages/03_training.py` | 타깃/지표/알고리즘 선택 · 학습 | FR-040~049, 060~062 |
+| `pages/03_training.py` | 타깃/지표/알고리즘 선택 · 학습 | FR-040~049, 055~058, 060~069 |
 | `pages/04_results.py` | 모델 비교표 · 성능 플롯 · 저장 | FR-063, 070~073 |
 | `pages/05_models.py` | 저장 모델 목록 · 상세 · 삭제 | FR-074, 075 |
 | `pages/06_prediction.py` | 단건/파일 예측 · 결과 다운로드 | FR-080~085 |
