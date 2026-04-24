@@ -31,6 +31,8 @@ class Event:
     TRAINING_FAILED = "training.failed"
     MODEL_TRAIN_FAILED = "training.model_failed"  # 개별 알고리즘 실패
     TRAINING_PREPROCESSING_CUSTOMIZED = "training.preprocessing_customized"  # FR-055~058, §9.8
+    TRAINING_ALGORITHMS_FILTERED = "training.algorithms_filtered"  # FR-067, §10.3
+    TRAINING_TUNING_DOWNGRADED = "training.tuning_downgraded"  # §10.3 (튜닝 본체는 §11)
 
     # 모델/아티팩트
     MODEL_SAVED = "model.saved"

@@ -47,7 +47,7 @@ from ml.preprocess import (
     split_feature_types,
     split_feature_types_v2,
 )
-from ml.registry import get_specs
+from ml.registry import AlgoSpec, get_specs
 from ml.schemas import PreprocessingConfig
 from ml.trainers import split_dataset, train_all
 from repositories import (
@@ -499,11 +499,76 @@ def _make_balancer(
     def _balancer(
         estimator: Any, X_train: pd.DataFrame, y_train: pd.Series
     ) -> tuple[Any, pd.DataFrame, pd.Series]:
-        return apply_imbalance_strategy(
-            estimator, X_train, y_train, pp_cfg, task_type=task_type
-        )
+        return apply_imbalance_strategy(estimator, X_train, y_train, pp_cfg, task_type=task_type)
 
     return _balancer
+
+
+def _apply_algorithm_filter(
+    specs: list[AlgoSpec], config: TrainingConfig, job_id: int
+) -> list[AlgoSpec]:
+    """§10.3 (FR-067): ``config.algorithms`` 로 후보 specs 를 필터링.
+
+    - ``config.algorithms is None`` → 입력을 그대로 반환 (v0.2.0 byte/audit 동치).
+    - 빈/중복 값은 ``TrainingConfig.__post_init__`` 에서 이미 차단됨.
+    - 미등록 이름 포함 → ``ValidationError``.
+    - 필터가 실제로 적용될 때만 ``Event.TRAINING_ALGORITHMS_FILTERED`` 를
+      AuditLog + 구조화 로그 각 1회 기록.
+    """
+    if config.algorithms is None:
+        return specs
+
+    requested = set(config.algorithms)
+    known = {s.name for s in specs}
+    unknown = requested - known
+    if unknown:
+        raise ValidationError(
+            f"등록되지 않은 알고리즘: {sorted(unknown)} (task={config.task_type})"
+        )
+    filtered = [s for s in specs if s.name in requested]
+    if not filtered:
+        raise ValidationError("선택한 알고리즘이 현재 task 에 등록되어 있지 않습니다.")
+
+    sorted_names = sorted(requested)
+    with session_scope() as session:
+        _append_log(session, job_id, f"algorithms={sorted_names}")
+        audit_repository.write(
+            session,
+            action_type=Event.TRAINING_ALGORITHMS_FILTERED,
+            target_type="TrainingJob",
+            target_id=job_id,
+            detail={"algorithms": sorted_names},
+        )
+    log_event(
+        logger,
+        Event.TRAINING_ALGORITHMS_FILTERED,
+        job_id=job_id,
+        algorithms=sorted_names,
+    )
+    return filtered
+
+
+def _emit_tuning_downgrade(config: TrainingConfig, job_id: int) -> None:
+    """§10.3 (§11 선반영): 튜닝 요청 시 안전 downgrade.
+
+    ``ml/tuners.py`` 가 없는 현 시점에서 ``method != "none"`` 이면 run_log 에
+    경고를 남기고 구조화 로그로 ``Event.TRAINING_TUNING_DOWNGRADED`` 을 1회 emit
+    한 뒤, 실제 학습은 기본(비튜닝) 경로로 진행한다.
+    """
+    if config.tuning is None or config.tuning.method == "none":
+        return
+    with session_scope() as session:
+        _append_log(
+            session,
+            job_id,
+            f"tuning=downgraded_v010 (requested method={config.tuning.method})",
+        )
+    log_event(
+        logger,
+        Event.TRAINING_TUNING_DOWNGRADED,
+        job_id=job_id,
+        requested_method=config.tuning.method,
+    )
 
 
 # --------------------------------------------------------- Public use-cases
@@ -578,14 +643,15 @@ def run_training(
         balancer = _make_balancer(pp_cfg_effective, config.task_type)
         if balancer is not None:
             with session_scope() as session:
-                _append_log(
-                    session, job_id, f"balance: strategy={pp_cfg_effective.imbalance}"
-                )
+                _append_log(session, job_id, f"balance: strategy={pp_cfg_effective.imbalance}")
 
         # 5) 다중 학습
         specs = get_specs(config.task_type)
         if not specs:
             raise ValidationError(f"등록된 알고리즘이 없습니다: task_type={config.task_type}")
+
+        specs = _apply_algorithm_filter(specs, config, job_id)
+        _emit_tuning_downgrade(config, job_id)
 
         train_start = _STAGE_RATIO["train_start"]
         train_end = _STAGE_RATIO["train_end"]
@@ -736,9 +802,7 @@ def preview_preprocessing(
     route_report = plan_categorical_routing(df, cat_cols, pp_cfg)
 
     # bool_as_numeric=False 일 때 bool 은 범주로 합류 (UI 표시도 그 규칙을 반영).
-    effective_cat_cols = (
-        list(cat_cols) if pp_cfg.bool_as_numeric else [*cat_cols, *bool_cols]
-    )
+    effective_cat_cols = list(cat_cols) if pp_cfg.bool_as_numeric else [*cat_cols, *bool_cols]
     effective_bool_cols = list(bool_cols) if pp_cfg.bool_as_numeric else []
 
     feature_schema = build_feature_schema(

@@ -186,6 +186,33 @@ class PreprocessingConfig:
         return cls(**kwargs)
 
 
+TuningMethod = Literal["none", "grid", "halving"]
+
+
+@dataclass(frozen=True, slots=True)
+class TuningConfig:
+    """하이퍼파라미터 튜닝 설정 (§10.3 스키마만, 실제 실행은 §11).
+
+    이번 스프린트(§10) 에서는 **슬롯만** 제공한다. ``method != "none"`` 이면
+    ``services/training_service.run_training`` 이 안전하게 downgrade 후
+    ``Event.TRAINING_TUNING_DOWNGRADED`` 을 1회 emit 한다.
+    §11 에서 `ml/tuners.py` + 통합 로직이 추가되면 즉시 활성화된다.
+    """
+
+    method: TuningMethod = "none"
+    cv_folds: int = 3
+    max_iter: int | None = None
+    timeout_sec: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.cv_folds < 2:
+            raise ValueError("cv_folds 는 2 이상이어야 합니다.")
+        if self.max_iter is not None and self.max_iter <= 0:
+            raise ValueError("max_iter 는 양의 정수여야 합니다.")
+        if self.timeout_sec is not None and self.timeout_sec <= 0:
+            raise ValueError("timeout_sec 는 양의 정수여야 합니다.")
+
+
 @dataclass(frozen=True, slots=True)
 class TrainingConfig:
     """학습 실행 입력 파라미터 (UI → Service → ML)."""
@@ -198,6 +225,10 @@ class TrainingConfig:
     metric_key: str = ""  # 비어 있으면 기본 metric (registry 기본값)
     job_name: str | None = None
     preprocessing: PreprocessingConfig | None = None
+    # §10.3 (FR-067): 학습 후보 필터. None = 전체(기존 동작).
+    algorithms: tuple[str, ...] | None = None
+    # §10.3 (§11 스키마 선반영): 튜닝 설정. None 또는 method="none" = 튜닝 비활성.
+    tuning: TuningConfig | None = None
 
     def __post_init__(self) -> None:
         if not 0.0 < self.test_size < 1.0:
@@ -215,6 +246,12 @@ class TrainingConfig:
             and self.task_type == "regression"
         ):
             raise ValueError("SMOTE 는 분류(classification) 작업 전용입니다.")
+        # §10.3: algorithms 필드 검증 — 빈 튜플/중복 금지.
+        if self.algorithms is not None:
+            if len(self.algorithms) == 0:
+                raise ValueError("최소 1개 알고리즘을 선택해야 합니다.")
+            if len(set(self.algorithms)) != len(self.algorithms):
+                raise ValueError(f"algorithms 에 중복 이름이 있습니다: {list(self.algorithms)}")
 
 
 @dataclass(frozen=True, slots=True)

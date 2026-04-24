@@ -1000,15 +1000,15 @@ FR-100 으로 편입.
 
 ### 10.3 `TrainingConfig` 확장 + service 필터링 — FR-067
 
-- [ ] `ml/schemas.py` 에 `TuningConfig` dataclass 신설 (frozen, slots). 필드: `method: Literal["none","grid","halving"]="none"`, `cv_folds: int = 3`, `max_iter: int | None = None`, `timeout_sec: int | None = None`.
-- [ ] `TrainingConfig` 에 `algorithms: tuple[str, ...] | None = None`, `tuning: TuningConfig | None = None` 추가.
-- [ ] `TrainingConfig.__post_init__`:
+- [x] `ml/schemas.py` 에 `TuningConfig` dataclass 신설 (frozen, slots). 필드: `method: Literal["none","grid","halving"]="none"`, `cv_folds: int = 3`, `max_iter: int | None = None`, `timeout_sec: int | None = None`.
+- [x] `TrainingConfig` 에 `algorithms: tuple[str, ...] | None = None`, `tuning: TuningConfig | None = None` 추가.
+- [x] `TrainingConfig.__post_init__`:
   - `algorithms` 가 빈 튜플 → `ValueError("최소 1개 알고리즘을 선택해야 합니다.")`
   - `algorithms` 에 중복 → `ValueError`
   - `tuning is not None and tuning.method != "none"` → 허용(service 층에서 downgrade).
-- [ ] `services/training_service.py::run_training` 에 specs 필터링 로직 추가 (§10.3 설계 블록 참조). 미등록 이름 포함 시 `ValidationError`.
-- [ ] `utils/events.py` 에 `TRAINING_ALGORITHMS_FILTERED = "training.algorithms_filtered"` 추가. 선택이 전체 미만일 때만 `audit_repository.write` + `log_event` 각 1회.
-- [ ] `config.tuning` 이 `method != "none"` 이면 run_log 에 `tuning=downgraded_v010` append + 실제로는 튜닝 미실행(§11 까지 stub).
+- [x] `services/training_service.py::run_training` 에 specs 필터링 로직 추가 (`_apply_algorithm_filter`). 미등록 이름 포함 시 `ValidationError`.
+- [x] `utils/events.py` 에 `TRAINING_ALGORITHMS_FILTERED = "training.algorithms_filtered"` + `TRAINING_TUNING_DOWNGRADED = "training.tuning_downgraded"` 추가. 선택이 전체 미만일 때만 `audit_repository.write` + `log_event` 각 1회.
+- [x] `config.tuning` 이 `method != "none"` 이면 `_emit_tuning_downgrade` 로 run_log 에 `tuning=downgraded_v010` append + 실제로는 튜닝 미실행(§11 까지 stub).
 
 ### 10.4 서비스 API · DTO — FR-067
 

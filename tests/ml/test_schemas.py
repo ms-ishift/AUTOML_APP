@@ -11,6 +11,7 @@ from ml.schemas import (
     FeatureSchema,
     PreprocessingConfig,
     TrainingConfig,
+    TuningConfig,
 )
 
 # --------------------------------------------------------------------- #1~3
@@ -230,3 +231,82 @@ def test_derived_feature_frozen() -> None:
     d = DerivedFeature(name="x_year", source="x", kind="datetime_year")
     with pytest.raises(FrozenInstanceError):
         d.name = "other"  # type: ignore[misc]
+
+
+# ---------------------------------------------------- §10.3 TrainingConfig 확장
+
+
+def test_training_config_algorithms_default_is_none() -> None:
+    """기본값 None → 필터 미적용 (v0.2.0 동치)."""
+    cfg = TrainingConfig(dataset_id=1, task_type="classification", target_column="y")
+    assert cfg.algorithms is None
+    assert cfg.tuning is None
+
+
+def test_training_config_algorithms_empty_tuple_rejected() -> None:
+    with pytest.raises(ValueError, match="최소 1개"):
+        TrainingConfig(
+            dataset_id=1,
+            task_type="classification",
+            target_column="y",
+            algorithms=(),
+        )
+
+
+def test_training_config_algorithms_duplicates_rejected() -> None:
+    with pytest.raises(ValueError, match="중복"):
+        TrainingConfig(
+            dataset_id=1,
+            task_type="classification",
+            target_column="y",
+            algorithms=("random_forest", "random_forest"),
+        )
+
+
+def test_training_config_algorithms_roundtrip() -> None:
+    cfg = TrainingConfig(
+        dataset_id=1,
+        task_type="classification",
+        target_column="y",
+        algorithms=("random_forest", "logistic_regression"),
+    )
+    assert cfg.algorithms == ("random_forest", "logistic_regression")
+
+
+# ------------------------------------------------------------- §10.3 TuningConfig
+
+
+def test_tuning_config_defaults() -> None:
+    t = TuningConfig()
+    assert t.method == "none"
+    assert t.cv_folds == 3
+    assert t.max_iter is None
+    assert t.timeout_sec is None
+
+
+def test_tuning_config_accepts_grid_method() -> None:
+    t = TuningConfig(method="grid", cv_folds=5)
+    assert t.method == "grid"
+    assert t.cv_folds == 5
+
+
+def test_tuning_config_rejects_invalid_cv_folds() -> None:
+    with pytest.raises(ValueError, match="cv_folds"):
+        TuningConfig(cv_folds=1)
+
+
+def test_tuning_config_rejects_non_positive_timeout() -> None:
+    with pytest.raises(ValueError, match="timeout_sec"):
+        TuningConfig(timeout_sec=0)
+
+
+def test_training_config_with_tuning_slot() -> None:
+    """§10.3: tuning 필드는 스키마만 — method='grid' 라도 TrainingConfig 는 수용."""
+    cfg = TrainingConfig(
+        dataset_id=1,
+        task_type="classification",
+        target_column="y",
+        tuning=TuningConfig(method="grid"),
+    )
+    assert cfg.tuning is not None
+    assert cfg.tuning.method == "grid"

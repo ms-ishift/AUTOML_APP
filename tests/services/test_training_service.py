@@ -17,7 +17,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from ml.schemas import PreprocessingConfig, TrainingConfig
+from ml.schemas import PreprocessingConfig, TrainingConfig, TuningConfig
 from repositories import (
     audit_repository,
     dataset_repository,
@@ -369,15 +369,12 @@ class TestPreprocessingForwarding:
             task_type="classification",
             target_column="species",
         )
-        training_service.run_training(
-            config, on_progress=lambda s, r: stages.append((s, r))
-        )
+        training_service.run_training(config, on_progress=lambda s, r: stages.append((s, r)))
         names = [s for s, _ in stages]
         assert "feature_engineering" in names
         assert "balance" in names
         idx = {
-            n: names.index(n)
-            for n in ("preprocessing", "feature_engineering", "split", "balance")
+            n: names.index(n) for n in ("preprocessing", "feature_engineering", "split", "balance")
         }
         assert idx["preprocessing"] < idx["feature_engineering"]
         assert idx["feature_engineering"] < idx["split"]
@@ -448,9 +445,9 @@ class TestPreprocessingForwarding:
         saved_dirs = [d for d in models_dir.iterdir() if d.is_dir()]
         assert saved_dirs
         for d in saved_dirs:
-            assert (d / "preprocessing_config.json").exists(), (
-                f"preprocessing_config.json 미생성: {d}"
-            )
+            assert (
+                d / "preprocessing_config.json"
+            ).exists(), f"preprocessing_config.json 미생성: {d}"
 
     def test_default_config_skips_preprocessing_json(
         self,
@@ -541,6 +538,142 @@ class TestPreprocessingForwarding:
             ]
 
 
+class TestAlgorithmFiltering:
+    """§10.3 (FR-067): TrainingConfig.algorithms 필터링 + 감사 로그."""
+
+    def test_default_none_equals_full_set(
+        self,
+        classification_csv: Path,
+        tmp_storage: Path,
+        seeded_system_user: object,
+    ) -> None:
+        """algorithms=None → 전체 후보 학습, training.algorithms_filtered 감사 0건 (v0.2.0 동치)."""
+        _, dataset_id = _seed_project_and_dataset(classification_csv, tmp_storage)
+        config = TrainingConfig(
+            dataset_id=dataset_id,
+            task_type="classification",
+            target_column="species",
+        )
+        result = training_service.run_training(config)
+        successful = [r for r in result.rows if r.status == "success"]
+        assert len(successful) >= 2
+
+        with session_scope() as session:
+            logs = audit_repository.list_logs(session, action_type="training.algorithms_filtered")
+            assert not [
+                log
+                for log in logs
+                if log.target_type == "TrainingJob" and log.target_id == result.job_id
+            ]
+
+    def test_single_algorithm_trains_only_that_model(
+        self,
+        classification_csv: Path,
+        tmp_storage: Path,
+        seeded_system_user: object,
+    ) -> None:
+        """algorithms=('random_forest',) → result.rows 정확히 1건 + 감사 1건."""
+        _, dataset_id = _seed_project_and_dataset(classification_csv, tmp_storage)
+        config = TrainingConfig(
+            dataset_id=dataset_id,
+            task_type="classification",
+            target_column="species",
+            algorithms=("random_forest",),
+        )
+        result = training_service.run_training(config)
+
+        names = {r.algo_name for r in result.rows}
+        assert names == {"random_forest"}
+
+        with session_scope() as session:
+            logs = audit_repository.list_logs(session, action_type="training.algorithms_filtered")
+            job_logs = [
+                log
+                for log in logs
+                if log.target_type == "TrainingJob" and log.target_id == result.job_id
+            ]
+            assert len(job_logs) == 1
+            detail = job_logs[0].detail_json or {}
+            assert detail.get("algorithms") == ["random_forest"]
+
+    def test_unknown_algorithm_raises_validation_error(
+        self,
+        classification_csv: Path,
+        tmp_storage: Path,
+        seeded_system_user: object,
+    ) -> None:
+        """미등록 이름 포함 → ValidationError."""
+        _, dataset_id = _seed_project_and_dataset(classification_csv, tmp_storage)
+        config = TrainingConfig(
+            dataset_id=dataset_id,
+            task_type="classification",
+            target_column="species",
+            algorithms=("mystery_forest",),
+        )
+        with pytest.raises(ValidationError, match="mystery_forest"):
+            training_service.run_training(config)
+
+    def test_multiple_algorithms_trains_selected_subset(
+        self,
+        classification_csv: Path,
+        tmp_storage: Path,
+        seeded_system_user: object,
+    ) -> None:
+        """2개 선택 → trained_models 정확히 2건 + 감사 1건 (detail 에 두 이름 모두)."""
+        _, dataset_id = _seed_project_and_dataset(classification_csv, tmp_storage)
+        config = TrainingConfig(
+            dataset_id=dataset_id,
+            task_type="classification",
+            target_column="species",
+            algorithms=("logistic_regression", "random_forest"),
+        )
+        result = training_service.run_training(config)
+
+        names = {r.algo_name for r in result.rows}
+        assert names == {"logistic_regression", "random_forest"}
+
+        with session_scope() as session:
+            logs = audit_repository.list_logs(session, action_type="training.algorithms_filtered")
+            job_logs = [
+                log
+                for log in logs
+                if log.target_type == "TrainingJob" and log.target_id == result.job_id
+            ]
+            assert len(job_logs) == 1
+            assert set((job_logs[0].detail_json or {}).get("algorithms", [])) == {
+                "logistic_regression",
+                "random_forest",
+            }
+
+    def test_tuning_downgrade_emits_event_but_still_trains(
+        self,
+        classification_csv: Path,
+        tmp_storage: Path,
+        seeded_system_user: object,
+    ) -> None:
+        """§10.3 (§11 선반영): tuning.method='grid' 는 현재 downgrade 되어야 한다.
+
+        - 학습은 정상 완료 (result.rows 유지)
+        - run_log 에 'tuning=downgraded_v010' 포함
+        """
+        _, dataset_id = _seed_project_and_dataset(classification_csv, tmp_storage)
+        config = TrainingConfig(
+            dataset_id=dataset_id,
+            task_type="classification",
+            target_column="species",
+            algorithms=("logistic_regression",),
+            tuning=TuningConfig(method="grid", cv_folds=3),
+        )
+        result = training_service.run_training(config)
+        assert len(result.rows) == 1
+
+        with session_scope() as session:
+            job = training_repository.get(session, result.job_id)
+            assert job is not None
+            run_log = job.run_log or ""
+            assert "tuning=downgraded_v010" in run_log
+
+
 class TestPreviewPreprocessing:
     """§9.7: preview_preprocessing 읽기 전용 유스케이스."""
 
@@ -626,9 +759,7 @@ class TestPreviewPreprocessing:
         derived_names = {name for _, name, _ in preview.derived}
         assert {"cat__A", "cat__B", "cat__C"} <= derived_names
 
-    def test_missing_dataset_raises(
-        self, tmp_storage: Path, seeded_system_user: object
-    ) -> None:
+    def test_missing_dataset_raises(self, tmp_storage: Path, seeded_system_user: object) -> None:
         config = TrainingConfig(
             dataset_id=99999,
             task_type="classification",
