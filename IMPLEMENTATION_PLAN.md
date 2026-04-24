@@ -1056,7 +1056,7 @@ FR-100 으로 편입.
   - §10 모든 체크박스 `[x]` 처리
   - 변경 이력 0.5 행 append
   - 진행 로그 §10.1 ~ §10.7 append
-- [ ] `make plan-check` → `OK: in-progress=0` 확인 후 `main` 으로 ff-merge + push.
+- [x] `make plan-check` → `OK: in-progress=0` 확인 후 `main` 으로 ff-merge + push. (2026-04-24: 5937763..00e7648)
 
 ### 10.8 수용 기준 (단계 10 전체)
 
