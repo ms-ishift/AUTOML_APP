@@ -1,0 +1,14 @@
+# Optional ML backends (IMPLEMENTATION_PLAN §10.1, FR-069).
+#
+# This file is intentionally NOT installed by `make install` or CI; it is an
+# opt-in manifest for local environments that want heavier gradient-boosting
+# backends beyond the sklearn-only defaults.
+#
+# Install with:
+#     pip install -r requirements-optional.txt
+#
+# Missing packages are handled gracefully by `ml/registry.py` via
+# `OptionalBackendStatus`: the corresponding algorithm is simply skipped from
+# the candidate list and the reason is surfaced in the training page.
+
+catboost>=1.2,<2.0

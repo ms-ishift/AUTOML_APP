@@ -83,6 +83,10 @@ streamlit run app.py
 > XGBoost / LightGBM 은 `requirements.txt` 에 포함돼 있으나 **네이티브 런타임 의존**
 > (macOS 는 `libomp`) 이 없으면 import 가 실패해 학습 후보에서 자동 제외된다. 현재 상태는
 > `make doctor` 의 *optional backends* 섹션으로 확인한다. macOS 복구: `brew install libomp`.
+>
+> **CatBoost (선택)** — `requirements-optional.txt` 에만 명시돼 기본 설치에는 포함되지
+> 않는다. 사용하려면 `pip install -r requirements-optional.txt`. 미설치 상태에서도 앱은
+> 정상 기동하며 학습 페이지에서 후보 목록에 "미설치" 사유와 함께 자동 제외된다.
 
 ---
 

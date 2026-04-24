@@ -974,29 +974,29 @@ FR-100 으로 편입.
 
 ### 10.1 레지스트리 확장 (`ml/registry.py`) — FR-068, FR-069
 
-- [~] sklearn 내장 6종 factory 추가 (random_state/n_jobs 기존 컨벤션 준수).
+- [x] sklearn 내장 6종 factory 추가 (random_state/n_jobs 기존 컨벤션 준수).
   - `HistGradientBoostingClassifier/Regressor(max_iter=300, learning_rate=0.1, early_stopping="auto")`
   - `ExtraTreesClassifier/Regressor(n_estimators=300, n_jobs=-1)`
   - `GradientBoostingClassifier/Regressor(n_estimators=200)`
   - `KNeighborsClassifier/Regressor(n_neighbors=5, weights="distance", n_jobs=-1)`
   - `ElasticNet(alpha=0.5, l1_ratio=0.5, max_iter=5000)`
   - `DecisionTreeRegressor()` (분류 쪽과 비대칭 해소)
-- [ ] `_try_register_catboost()` 추가 — 기존 `_try_register_xgboost` / `_try_register_lightgbm` 와 동일 패턴. `CatBoostClassifier/Regressor(iterations=300, verbose=0, random_seed=_RANDOM_STATE, allow_writing_files=False)`.
-- [ ] `optional_backends_status()` 가 `["xgboost", "lightgbm", "catboost"]` 순서로 3건 반환.
-- [ ] `requirements-optional.txt` 신설: `catboost>=1.2,<2.0` 1줄. `requirements.txt` 는 변경 없음.
-- [ ] `README.md` 품질 도구 섹션에 "optional backends 설치: `pip install -r requirements-optional.txt`" 안내 추가.
+- [x] `_try_register_catboost()` 추가 — 기존 `_try_register_xgboost` / `_try_register_lightgbm` 와 동일 패턴. `CatBoostClassifier/Regressor(iterations=300, verbose=0, random_seed=_RANDOM_STATE, allow_writing_files=False)`.
+- [x] `optional_backends_status()` 가 `["xgboost", "lightgbm", "catboost"]` 순서로 3건 반환.
+- [x] `requirements-optional.txt` 신설: `catboost>=1.2,<2.0` 1줄. `requirements.txt` 는 변경 없음.
+- [x] `README.md` 품질 도구 섹션에 "optional backends 설치: `pip install -r requirements-optional.txt`" 안내 추가.
 
 ### 10.2 `AlgoSpec` 메타데이터 확장 — FR-067, FR-068
 
-- [ ] `AlgoSpec` 에 `is_optional_backend: bool = False` 추가. xgboost/lightgbm/catboost 등록 시 True.
-- [ ] `AlgoSpec` 에 `param_grid: Mapping[str, tuple[Any, ...]] | None = None` 추가. Tier 1 6종 전부에 기본 grid 등록:
+- [x] `AlgoSpec` 에 `is_optional_backend: bool = False` 추가. xgboost/lightgbm/catboost 등록 시 True.
+- [x] `AlgoSpec` 에 `param_grid: Mapping[str, tuple[Any, ...]] | None = None` 추가. Tier 1 6종 전부에 기본 grid 등록:
   - HistGBM: `{"learning_rate": (0.05, 0.1, 0.2), "max_iter": (200, 400)}`
   - ExtraTrees: `{"n_estimators": (200, 500), "max_depth": (None, 10, 20)}`
   - GradientBoosting: `{"n_estimators": (100, 200), "learning_rate": (0.05, 0.1)}`
   - KNN: `{"n_neighbors": (3, 5, 10), "weights": ("uniform", "distance")}`
   - ElasticNet: `{"alpha": (0.1, 0.5, 1.0), "l1_ratio": (0.2, 0.5, 0.8)}`
   - DecisionTreeRegressor: `{"max_depth": (None, 5, 10), "min_samples_split": (2, 5)}`
-- [ ] **불변식 테스트**: task 내 `name` 중복 금지 (`tests/ml/test_registry.py::test_algo_names_unique_per_task`).
+- [x] **불변식 테스트**: task 내 `name` 중복 금지 (`tests/ml/test_registry.py::test_algo_names_unique_per_task`).
 
 ### 10.3 `TrainingConfig` 확장 + service 필터링 — FR-067
 
