@@ -67,9 +67,7 @@ def _mixed_csv(tmp_path: Path, *, rows: int = 100) -> Path:
             # nunique=50 이지만 unique_ratio=0.5 라 suggest_excluded 대상이 아니다.
             "cat_high": [f"v{i % 50}" for i in range(rows)],
             "is_active": [bool(i % 2) for i in range(rows)],
-            "dt": pd.date_range("2024-01-01", periods=rows, freq="D").strftime(
-                "%Y-%m-%d"
-            ),
+            "dt": pd.date_range("2024-01-01", periods=rows, freq="D").strftime("%Y-%m-%d"),
         }
     )
     csv = tmp_path / "mixed.csv"

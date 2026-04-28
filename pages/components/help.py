@@ -71,9 +71,7 @@ def list_manual_keys() -> list[str]:
     if not MANUAL_DIR.is_dir():
         return []
     return sorted(
-        p.stem
-        for p in MANUAL_DIR.glob("*.md")
-        if p.is_file() and not p.name.startswith("_")
+        p.stem for p in MANUAL_DIR.glob("*.md") if p.is_file() and not p.name.startswith("_")
     )
 
 

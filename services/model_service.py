@@ -19,13 +19,35 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from config.settings import settings
-from repositories import audit_repository, model_repository, training_repository
+from ml.artifacts import load_model_bundle
+from ml.feature_influence import (
+    DEFAULT_MAX_ROWS,
+    DEFAULT_N_REPEATS,
+    compute_permutation_importance,
+    extract_builtin_transformed_importances,
+    scoring_for_permutation,
+)
+from ml.schemas import TrainingConfig
+from ml.trainers import split_dataset
+from repositories import audit_repository, dataset_repository, model_repository, training_repository
 from repositories.base import session_scope
-from services.dto import FeatureSchemaDTO, ModelDetailDTO, ModelDTO
-from utils.errors import NotFoundError
+from services.dto import (
+    FeatureInfluenceBuiltinRowDTO,
+    FeatureInfluencePermutationRowDTO,
+    FeatureInfluenceResultDTO,
+    FeatureSchemaDTO,
+    ModelDetailDTO,
+    ModelDTO,
+)
+from services.training_service import (
+    assert_valid_training_target,
+    rebuild_xy_for_influence_analysis,
+)
+from utils.errors import AppError, NotFoundError, StorageError, ValidationError
 from utils.events import Event
+from utils.file_utils import read_tabular
 from utils.log_utils import get_logger, log_event
-from utils.messages import entity_not_found
+from utils.messages import Msg, entity_not_found
 
 if TYPE_CHECKING:
     from repositories.models import Model
@@ -207,6 +229,148 @@ def _cleanup_model_assets(model_dir: Path, extra_files: list[Path]) -> None:
 # ---------------------------------------------------- helpers for others
 
 
+def _load_influence_bundle_and_config(  # noqa: C901 — DB 조회 + 번들/설정/DataFrame 로드 오케스트레이션
+    model_id: int,
+) -> tuple[Any, TrainingConfig, Any, int, str, str, str]:
+    """DB+디스크에서 모델 번들, ``TrainingConfig``, 원시 DataFrame 을 로드."""
+    with session_scope() as session:
+        model = model_repository.get(session, model_id)
+        if model is None:
+            raise NotFoundError(entity_not_found("모델", model_id))
+        if not model.model_path:
+            raise NotFoundError(
+                entity_not_found("모델 아티팩트", model_id) + " (학습 실패 행에는 파일이 없습니다.)"
+            )
+        job = training_repository.get(session, model.training_job_id)
+        if job is None:
+            raise NotFoundError(entity_not_found("학습 잡", model.training_job_id))
+        dataset = dataset_repository.get(session, job.dataset_id)
+        if dataset is None:
+            raise NotFoundError(entity_not_found("데이터셋", job.dataset_id))
+        model_dir = Path(model.model_path).parent
+        dataset_path = Path(dataset.file_path)
+        job_id = int(job.training_job_id)
+        dataset_id = int(job.dataset_id)
+        task_type = str(job.task_type)
+        target_column = str(job.target_column)
+        metric_key = str(job.metric_key)
+        excluded_columns = tuple(job.excluded_columns_json or ())
+        algorithm_name = str(model.algorithm_name)
+
+    if not model_dir.is_dir():
+        raise NotFoundError(f"모델 디렉터리가 없습니다: {model_dir}")
+    if not dataset_path.exists():
+        raise StorageError(Msg.FILE_PARSE_FAILED)
+
+    try:
+        bundle = load_model_bundle(model_dir)
+    except FileNotFoundError as exc:
+        raise NotFoundError(f"모델 번들을 읽을 수 없습니다 (model_id={model_id}).") from exc
+
+    metrics = bundle.metrics or {}
+    n_train = int(metrics.get("n_train") or 0)
+    n_test_m = int(metrics.get("n_test") or 0)
+    if n_train > 0 and n_test_m > 0:
+        test_size = n_test_m / (n_train + n_test_m)
+    else:
+        test_size = settings.DEFAULT_TEST_SIZE
+
+    pp = bundle.preprocessing
+    preprocessing = None if pp.is_default else pp
+    config = TrainingConfig(
+        dataset_id=dataset_id,
+        task_type=task_type,  # type: ignore[arg-type]
+        target_column=target_column,
+        excluded_columns=excluded_columns,
+        test_size=float(test_size),
+        metric_key=metric_key,
+        preprocessing=preprocessing,
+    )
+
+    try:
+        df = read_tabular(dataset_path)
+    except AppError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise StorageError(Msg.FILE_PARSE_FAILED, cause=exc) from exc
+
+    return bundle, config, df, job_id, algorithm_name, task_type, metric_key
+
+
+def get_feature_influence(model_id: int) -> FeatureInfluenceResultDTO:
+    """FR-094, FR-095: 저장된 모델에 대해 테스트 분할 부분 표본으로 순열 중요도 및 내장 트리 중요도.
+
+    - 테스트 분할: ``metrics.json`` 의 ``n_train``/``n_test`` 로 ``test_size`` 를 복원한 뒤
+      ``split_dataset`` 으로 학습 시와 동일한 ``random_state`` 분할을 재현한다.
+    - 순열 평가 행 상한: ``ml.feature_influence.DEFAULT_MAX_ROWS``.
+    """
+    bundle, config, df, job_id, algorithm_name, task_type, metric_key = (
+        _load_influence_bundle_and_config(model_id)
+    )
+
+    assert_valid_training_target(df, config)
+    X, y = rebuild_xy_for_influence_analysis(df, config)
+    _x_train, X_test, _y_train, y_test = split_dataset(
+        X, y, test_size=config.test_size, task_type=config.task_type
+    )
+
+    scoring = scoring_for_permutation(task_type, metric_key)
+    try:
+        rows_raw, n_used, n_test_total = compute_permutation_importance(
+            bundle.estimator,
+            X_test,
+            y_test,
+            task_type=task_type,
+            metric_key=metric_key,
+            n_repeats=DEFAULT_N_REPEATS,
+            random_state=settings.RANDOM_SEED,
+            n_jobs=1,
+            max_rows=DEFAULT_MAX_ROWS,
+        )
+    except ValueError as exc:
+        raise ValidationError(Msg.INFLUENCE_FAILED, cause=exc) from exc
+
+    perm_rows = tuple(
+        FeatureInfluencePermutationRowDTO(feature_name=name, permutation_mean=m, permutation_std=s)
+        for name, m, s in rows_raw
+    )
+    built = extract_builtin_transformed_importances(bundle.estimator)
+    builtin_rows = tuple(
+        FeatureInfluenceBuiltinRowDTO(feature_name=n, importance=v) for n, v in (built or [])
+    )
+
+    with session_scope() as session:
+        audit_repository.write(
+            session,
+            action_type=Event.MODEL_INFLUENCE_COMPUTED,
+            target_type="Model",
+            target_id=model_id,
+            detail={
+                "training_job_id": job_id,
+                "algorithm_name": algorithm_name,
+                "n_rows_used": n_used,
+                "n_test_rows": n_test_total,
+                "n_builtin": len(builtin_rows),
+                "scoring": scoring,
+            },
+        )
+    log_event(
+        logger,
+        Event.MODEL_INFLUENCE_COMPUTED,
+        model_id=model_id,
+        training_job_id=job_id,
+        n_rows_used=n_used,
+    )
+
+    return FeatureInfluenceResultDTO(
+        permutation_rows=perm_rows,
+        builtin_rows=builtin_rows,
+        n_rows_used=n_used,
+        n_test_rows=n_test_total,
+        scoring=scoring,
+    )
+
+
 def get_model_plot_data(model_id: int) -> dict[str, Any] | None:
     """FR-071/FR-072: 결과 비교 페이지용 플롯 데이터를 로드.
 
@@ -246,6 +410,7 @@ def find_best_model(training_job_id: int) -> ModelDTO | None:
 __all__ = [
     "list_models",
     "get_model_detail",
+    "get_feature_influence",
     "save_model",
     "delete_model",
     "find_best_model",

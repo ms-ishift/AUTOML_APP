@@ -91,6 +91,23 @@ def test_get_model_detail_missing_raises() -> None:
         model_service.get_model_detail(99999)
 
 
+def test_get_feature_influence_after_training(trained_project: tuple[int, int]) -> None:
+    """FR-094~095: 학습 직후 베스트 모델에 대해 순열 중요도가 산출된다."""
+    _project_id, job_id = trained_project
+    best = model_service.find_best_model(job_id)
+    assert best is not None
+    inf = model_service.get_feature_influence(best.id)
+    assert inf.permutation_rows, "순열 중요도 행이 1개 이상이어야 한다"
+    assert inf.n_rows_used >= 1
+    assert inf.n_test_rows >= 1
+    assert inf.scoring  # sklearn ``scoring`` 문자열
+    with session_scope() as session:
+        logs = audit_repository.list_logs(
+            session, action_type="model.influence_computed", target_id=best.id
+        )
+        assert logs, "감사 로그 model.influence_computed 가 기록되어야 한다"
+
+
 # ------------------------------------------------------------------- save
 
 

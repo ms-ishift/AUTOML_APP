@@ -1,7 +1,7 @@
 # AutoML Streamlit MVP — 구현 계획 (체크리스트)
 
-**문서 버전:** 0.4
-**최근 갱신:** 2026-04-23 (0.4 추가: §9 전처리 고도화 계획 수립 — FR-055~058, PreprocessingConfig + datetime/bool/고카디널리티 + class_weight/SMOTE + 피처 변환 미리보기. 0.3 기준 유지: DTO 분리, 메시지/이벤트 카탈로그, AUTH 정책, 업로드 한도 동기화, 네비 방식 고정, 비교표 규격, Makefile/pre-commit, 아티팩트 저장 순서)
+**문서 버전:** 0.7
+**최근 갱신:** 2026-04-24 (0.7: **§11 구현 완료** — `ml/feature_influence.py`, `model_service.get_feature_influence`, DTO·UI·테스트·`AutoML_Streamlit_MVP.md` FR-094~095·`ARCHITECTURE.md` §4.3·`docs/manual/04_results.md` 동기화. 0.6 스펙·§12 튜닝 앵커는 유지.)
 
 **참조 문서:**
 - 요구사항: [`AutoML_Streamlit_MVP.md`](./AutoML_Streamlit_MVP.md)
@@ -953,9 +953,9 @@ FR-100 으로 편입.
 1. Tier 1 sklearn 내장 모델 6종을 `ml/registry.py` 에 추가. Tier 2 (SVM/NB/MLP) 는 미포함 → §10.x+ 후속.
 2. 알고리즘 다중 선택(체크박스/multiselect) UI 도입. 전체 선택은 `algorithms=None` 으로 정규화해 v0.2.0 과 byte/audit 동치 유지.
 3. CatBoost 를 세 번째 optional backend 로 추가. **requirements 분리**: `requirements-optional.txt` 파일 신설에 `catboost>=1.2,<2.0` 기재 (CI 는 기본 requirements 만 설치, 로컬 opt-in).
-4. §11 하이퍼파라미터 튜닝은 후속 스프린트지만 **스키마 슬롯만 이번에 선반영**: `AlgoSpec.param_grid` 필드 + `TuningConfig` dataclass + `TrainingConfig.tuning` 필드.
+4. §12 하이퍼파라미터 튜닝은 후속 스프린트지만 **스키마 슬롯만 이번에 선반영**: `AlgoSpec.param_grid` 필드 + `TuningConfig` dataclass + `TrainingConfig.tuning` 필드.
 
-> **포함**: Tier 1 6종 (HistGBM/ExtraTrees/GradientBoosting/KNN/ElasticNet/DecisionTreeRegressor) + CatBoost optional + 후보 선택 UI + §11 스키마 슬롯.
+> **포함**: Tier 1 6종 (HistGBM/ExtraTrees/GradientBoosting/KNN/ElasticNet/DecisionTreeRegressor) + CatBoost optional + 후보 선택 UI + §12 스키마 슬롯.
 > **제외 (후속 이터레이션)**: Tier 2 (SVM/NB/MLP), 실제 튜닝 실행(ml/tuners.py), UI 튜닝 토글, 본격 param_grid 확장. §10.9 에 후속 항목으로 등록.
 
 ### 10.0 설계 결정 (고정)
@@ -968,7 +968,7 @@ FR-100 으로 편입.
 - [x] `AlgoSpec` 에 신규 필드 2개: `is_optional_backend: bool = False`, `param_grid: Mapping[str, tuple[Any, ...]] | None = None`.
 - [x] `TrainingConfig.algorithms: tuple[str, ...] | None = None` (None=전체, 빈 튜플=ValueError, 중복=ValueError).
 - [x] `TrainingConfig.tuning: TuningConfig | None = None` — **§10 에서는 스키마만**, `method != "none"` 이면 service 가 downgrade + run_log 경고.
-- [x] `param_grid` 는 Tier 1 **6종 전부** 에 2~4개 축의 작은 기본 grid 를 이번에 등록(사용자 결정 B). §11 진입 시 bulk 수정 없이 튜너만 붙이면 됨.
+- [x] `param_grid` 는 Tier 1 **6종 전부** 에 2~4개 축의 작은 기본 grid 를 이번에 등록(사용자 결정 B). §12 진입 시 bulk 수정 없이 튜너만 붙이면 됨.
 - [x] KNN 은 포함하되 스케일 민감 경고를 `docs/manual/03_training.md` "알고리즘 선택" 소절에 명시(사용자 결정).
 - [x] 하위호환: UI 가 전체 선택 시 `algorithms=None` 으로 내려보냄 → 감사/아티팩트 경로가 v0.2.0 과 byte 동치. 기존 `TrainingJob` 레코드/모델 번들은 전부 호환.
 
@@ -1008,7 +1008,7 @@ FR-100 으로 편입.
   - `tuning is not None and tuning.method != "none"` → 허용(service 층에서 downgrade).
 - [x] `services/training_service.py::run_training` 에 specs 필터링 로직 추가 (`_apply_algorithm_filter`). 미등록 이름 포함 시 `ValidationError`.
 - [x] `utils/events.py` 에 `TRAINING_ALGORITHMS_FILTERED = "training.algorithms_filtered"` + `TRAINING_TUNING_DOWNGRADED = "training.tuning_downgraded"` 추가. 선택이 전체 미만일 때만 `audit_repository.write` + `log_event` 각 1회.
-- [x] `config.tuning` 이 `method != "none"` 이면 `_emit_tuning_downgrade` 로 run_log 에 `tuning=downgraded_v010` append + 실제로는 튜닝 미실행(§11 까지 stub).
+- [x] `config.tuning` 이 `method != "none"` 이면 `_emit_tuning_downgrade` 로 run_log 에 `tuning=downgraded_v010` append + 실제로는 튜닝 미실행(§12 까지 stub).
 
 ### 10.4 서비스 API · DTO — FR-067
 
@@ -1064,14 +1064,91 @@ FR-100 으로 편입.
 - 기본 학습(전체 선택) 은 v0.2.0 과 byte/audit 동치 (artifacts/bundle/AuditLog 변경 없음).
 - 사용자가 1개 이상 알고리즘을 체크해제한 경우 `training.algorithms_filtered` AuditLog 가 정확히 1회 기록.
 - CatBoost 미설치 환경에서도 앱이 기동되며 UI 에 "설치 필요" reason 이 노출되고 선택 목록에서 자동 제외.
-- §11 하이퍼파라미터 튜닝을 건드리지 않고도 `TuningConfig` · `AlgoSpec.param_grid` 스키마가 존재.
+- §12 하이퍼파라미터 튜닝을 건드리지 않고도 `TuningConfig` · `AlgoSpec.param_grid` 스키마가 존재.
 
 ### 10.9 후속 범위 (이번 이터레이션 제외, 기록만)
 
-- [ ] **§11 하이퍼파라미터 튜닝 본체** — `ml/tuners.py::run_tuning`, service 통합, UI 튜닝 토글, best_params 노출, `pages/04_results.py` 표시
+- [ ] **§12 하이퍼파라미터 튜닝 본체** — `ml/tuners.py::run_tuning`, service 통합, UI 튜닝 토글, best_params 노출, `pages/04_results.py` 표시
 - [ ] **Tier 2 알고리즘** — SVC/SVR (n_samples 가드 + LinearSVC 대체), GaussianNB, MLP(스케일 경고)
 - [ ] **`algorithms_excluded` 자동 다운시프트** — 데이터 크기/차원 기반 자동 제외 규칙 (SVM 대용량 skip 등)
 - [ ] **CatBoost lazy import** — 첫 import 가 느린 문제(3–5s) 측정 후 필요 시 factory 수준 lazy 전환
+
+---
+
+## 단계 11. 특성 영향도 / 전역 설명성 (Phase A ~ Phase B)
+
+**목표 (사용자 표현 정렬):** “어떤 **예측값**이 나올지”가 아니라 “어떤 **입력(피처)** 이 결과에 **얼마나 영향**을 주는가”를 **데이터셋·모델 전역** 관점에서 요약한다. (지역 설명 SHAP/LIME 은 **§11.7 후속**.)
+
+**범위 확정 (2026-04-24, 사용자 결정)**
+1. **Phase A**: 저장된 **best 파이프라인**(또는 사용자가 고른 단일 모델) + **hold-out / 검증에 쓴 `X` 부분집합**에 대해 **순열 중요도(Permutation importance)** — `sklearn.inspection.permutation_importance` 기반. 회귀/분류 공통, 알고리즘 종속성 낮음.
+2. **Phase B**: best 가 **트리·부스팅 계열**이면 **내장 `feature_importances_`**(또는 동등 속성)를 Phase A 결과와 **동일 UI에서 병치 표시**(해석 차이를 매뉴얼 한 줄로 안내). 내장 importance 가 없는 모델(KNN, 로지스틱 등)은 Phase B 행을 숨기거나 “해당 없음” caption 만 표시.
+
+> **포함**: Phase A + Phase B, `ml/` 순수 함수 + `services/` 유스케이스 + `pages/04_results.py`(또는 `05_models.py`) UI, DTO, 테스트, 매뉴얼, FR 번호(구현 시 `AutoML_Streamlit_MVP.md` 동기화).
+> **제외 (§11.7)**: SHAP/LIME, PDP/ICE, 인과 추론, 실시간 대용량 전수 순열(비용 무제한).
+
+### 11.0 설계 결정 (고정)
+
+- [x] 레이어: **`ml/`** 에 점수 계산만 (`numpy`/`pandas`/`sklearn`). **`st` / SQLAlchemy import 금지** 유지.
+- [x] **입력 행렬**: 전처리 **후** 파이프라인에 넣는 `X` 와 동일 스키마(학습 시 `ColumnTransformer` 출력 컬럼명 또는 `get_feature_names_out` 정렬). **원시 업로드 컬럼명**과 1:1이 아닐 수 있음을 UI·매뉴얼에 명시.
+- [x] **데이터 출처**: 학습 잡과 동일한 **test split** 을 재사용할지, 별도 **검증 subsample** 을 둘지 결정 — 기본안은 **test split + 행 수 상한**(예: `min(n_test, 5000)`)으로 순열 비용 상한.
+- [x] **지표**: `permutation_importance` 의 `scoring` 은 학습 잡의 `task_type` + `metric_key` 와 정합(분류: 기본 `accuracy` 또는 잡의 주 지표에 맞춤; 회귀: `neg_root_mean_squared_error` 등).
+- [x] **재현성**: `random_state` 는 `TrainingConfig` / settings 의 고정 시드와 정렬.
+- [x] **법적·UX 문구**: “중요도 ≠ 인과”, 상관된 피처는 순열/importance 가 나눠 담는다는 **한 줄 면책**을 결과 패널 상단에 고정.
+
+### 11.1 Phase A — 순열 중요도 (`permutation_importance`)
+
+- [x] `ml/feature_influence.py`(가칭) 신설: `compute_permutation_importance(estimator, X, y, *, task_type, scoring, n_repeats, random_state, n_jobs)` → `list[tuple[str, float, float]]` 또는 `ml/schemas.py` 내 **작은 dataclass**(이름, mean, std). **Streamlit 비의존**.
+- [x] 파이프라인이 `fit` 된 상태만 허용; `X` 는 `DataFrame` 권장(컬럼명 유지). 실패 시 도메인 예외로 래핑(`utils/errors.py`).
+- [x] **성능**: `n_repeats` 기본 5~10, 행 상한 초과 시 subsample + run_log 한 줄 (`influence.subsample_rows=N`).
+- [x] 단위 테스트: 소형 `RandomForest` + 고정 시드로 mean importance 순위가 기대와 맞는 smoke 1건 + 엣지(상수 컬럼) 1건.
+
+### 11.2 Phase B — 트리 내장 importance 병치
+
+- [x] 동일 `ml/feature_influence.py`(또는 `ml/explainability.py`): `extract_builtin_tree_importance(estimator) -> dict[str, float] | None` — `final_estimator_` / `named_steps["model"]` 등 **sklearn 파이프라인**에서 최종 분류기·회귀기를 탐색해 `feature_importances_` 존재 시에만 반환.
+- [x] **피처 이름 정렬**: `get_feature_names_out()` 또는 학습 시 저장한 `FeatureSchema` 와 벡터 길이 일치 검증. 불일치 시 Phase B 를 생략하고 run_log 경고.
+- [x] **정규화(선택)**: UI 표시용으로 내장 importance 를 0~1 합=1 로 스케일할지 — 기본은 **raw** 두 열 + 매뉴얼에서 “스케일 비교 불가” 안내.
+- [x] 단위 테스트: `HistGradientBoosting` / `RandomForest` 파이프라인 mock 1건으로 비-None 경로; 로지스틱 파이프라인 1건으로 None 경로.
+
+### 11.3 Service · DTO · (선택) 캐시
+
+- [x] `services/dto.py`: `FeatureInfluenceRowDTO`(feature_name, permutation_mean, permutation_std, builtin_optional) 등 **UI 직렬화 가능 타입만**.
+- [x] `services/model_service.py`(또는 `training_service.py` — 기존 “모델 단건 로드” 소유권에 맞춤): `get_feature_influence(model_id: int) -> list[FeatureInfluenceRowDTO]` 유스케이스. 번들 `joblib` 로드 → Phase A 계산 → Phase B 시도 → DTO 리스트 반환.
+- [x] **Audit / 이벤트**: `utils/events.py` 에 `MODEL_INFLUENCE_COMPUTED` 등 상수 1개(구현 시 명명 확정). 계산 비용이 크면 “버튼 클릭 시 1회”만 호출.
+- [x] (선택) `storage/models/<id>/influence.json` 에 결과 캐시 + `metric_summary` 와 유사한 무효화 규칙 — **첫 구현은 캐시 없이 매 요청 계산**도 허용(단, subsample 필수).
+
+### 11.4 UI — `pages/04_results.py` (또는 best 모델 상세가 있는 페이지)
+
+- [x] 학습 완료 후 **“특성 영향도”** expander 또는 탭: 표 + `plotly` 막대(Phase A mean ± std error bar 권장).
+- [x] Phase B: 두 번째 trace 또는 옆 열 — 내장 importance 없으면 해당 구역 숨김 + `Msg` 상수로 한 줄 설명.
+- [x] 레이어: UI 에서 `ml/` 직접 import 금지 — **service API 만** 호출.
+
+### 11.5 테스트 · 문서 · FR
+
+- [x] `tests/services/test_*`: 번들 fixture 또는 기존 학습 happy path 후 `get_feature_influence` 통합 1건.
+- [x] `tests/ml/test_feature_influence.py`(신규): Phase A/B 순수 함수 단위.
+- [x] `docs/manual/04_results.md`(또는 해당 매뉴얼): Phase A vs B 차이, 인과 오해 방지, 원시 컬럼 vs 전처리 후 이름.
+- [x] `AutoML_Streamlit_MVP.md` · `ARCHITECTURE.md`: **FR-094**(Phase A), **FR-095**(Phase B) 및 `ARCHITECTURE.md` §4.3 데이터 흐름.
+- [x] `utils/messages.py` / `utils/events.py`: 사용자 문구·감사 이벤트 상수.
+
+### 11.6 수용 기준 (단계 11 전체)
+
+- [x] 저장된 best 모델이 있는 학습 잡에 대해 UI 에서 **순열 중요도 상위 N개**를 확인할 수 있다.
+- [x] 트리 best 인 경우 **내장 importance** 가 있으면 동일 화면에서 병치되고, 없으면 Phase A 만 깨끗이 동작한다.
+- [x] 대용량 test 에서도 **subsample + n_repeats** 로 서버가 멈추지 않는다(합리적 상한 문서화).
+- [x] 레이어 경계·DoD·계획서 체크리스트 준수.
+
+### 11.7 후속 범위 (이번 이터레이션 제외, 기록만)
+
+- [ ] **Phase C — SHAP** (`shap` 의존 추가 또는 optional), background 데이터 / subsample 정책.
+- [ ] PDP / ICE, 그룹별 중요도(stratified permutation).
+
+---
+
+## 단계 12. 하이퍼파라미터 튜닝 본체 (후속)
+
+*이 절은 문서·아키텍처에서 **튜닝 본체** 를 가리키는 절 번호 앵커다. 세부 체크리스트의 원형은 **§10.9 첫 항목**에 있으며, 구현 스프린트 착수 시 본 절로 상세 항목을 이관·확장한다.*
+
+- [ ] `ml/tuners.py::run_tuning`, `services/training_service.py` 통합, UI 튜닝 토글, `best_params` 노출, `pages/04_results.py` 표시 — §10.9 참조.
 
 ---
 
@@ -1088,6 +1165,7 @@ FR-100 으로 편입.
 | FR-055~058 고급 전처리 | `ml/schemas.py` (PreprocessingConfig), `ml/preprocess.py`, `ml/type_inference.py`, `ml/feature_engineering.py`, `ml/balancing.py`, `services/training_service.py` (preview_preprocessing), `pages/03_training.py` (고급 전처리 expander) | 9 |
 | FR-060~066 학습 | `ml/trainers.py`, `ml/evaluators.py`, `ml/registry.py`, `services/training_service.py` (아티팩트 저장 순서: 4.3a) | 3, 4 |
 | FR-067~069 알고리즘 확장 | `ml/registry.py` (Tier 1 + CatBoost optional), `ml/schemas.py` (algorithms/tuning), `services/training_service.py` (list_algorithms/필터링), `services/dto.py` (AlgorithmInfoDTO), `pages/03_training.py` (알고리즘 선택 expander), `requirements-optional.txt` | 10 |
+| FR-094~095 특성 영향도 (전역) | `ml/feature_influence.py`, `services/training_service.py`(전처리·타깃 검증 재사용), `services/model_service.py`(`get_feature_influence`), `services/dto.py`(`FeatureInfluence*DTO`), `pages/04_results.py`, `utils/messages.py`, `utils/events.py` | 11 |
 | FR-070~075 결과/모델 | `ml/artifacts.py`, `services/model_service.py`, `services/dto.py`, `pages/04_results.py`, `pages/05_models.py` | 3, 4, 6 |
 | FR-080~085 예측 | `services/prediction_service.py`, `pages/06_predict.py` | 4, 6 |
 | FR-090~093 이력/관리자 | `repositories/audit_repository.py`, `services/admin_service.py`, `pages/07_admin.py` | 2, 4, 6 |
@@ -1121,6 +1199,12 @@ FR-100 으로 편입.
                  │
                  ▼
           [8 (선택) 확장]
+                 │
+                 ▼
+          [11 특성 영향도 — Phase A/B]
+                 │
+                 ▼
+          [12 하이퍼파라미터 튜닝 본체 — 후속]
 ```
 
 ---
@@ -1158,6 +1242,10 @@ FR-100 으로 편입.
 | 2026-04-17 | 0.3 | **added**: 0.2a(네비 방식 고정), 0.2b(config.toml 동기화), 1.7(messages/events 카탈로그), 2.2a(AUTH 정책), 3.1a/b(DTO 분리), 4.3a(아티팩트 저장 순서), Makefile/pre-commit 훅, 6.4 비교표 규격 |
 | 2026-04-23 | 0.4 | **added**: §9 전처리 고도화 (FR-055~058) 계획 수립. L1(전략 선택)+L2(datetime/bool/고카디널리티)+L5(class_weight+SMOTE)+L6(피처 변환 미리보기) 범위 확정. 후속 범위(§9.11)에 Target encoding / PolynomialFeatures / 피처 선택 / 프리셋 저장 기록. `AutoML_Streamlit_MVP.md` §6.6 에 FR-055~058, §3.1 포함범위에 '사용자 제어 전처리' 반영. 부록 A 에 FR-055~058 매핑 추가. |
 | 2026-04-23 | 0.5 | **added**: §10 알고리즘 레지스트리 확장 (FR-067~069) 계획 수립. Tier 1 sklearn 내장 6종(HistGBM/ExtraTrees/GradientBoosting/KNN/ElasticNet/DecisionTreeRegressor) + CatBoost optional backend + 알고리즘 다중 선택 UI 범위 확정. §11 하이퍼파라미터 튜닝은 스키마(`TuningConfig` + `AlgoSpec.param_grid`) 만 이번에 선반영, 실제 튜너는 후속. CatBoost 의존은 `requirements-optional.txt` 별도 파일로 분리(사용자 결정 B). `param_grid` 는 Tier 1 6종 전부에 기본 grid 등록(사용자 결정 B). 후속 범위(§10.9): Tier 2(SVM/NB/MLP), 튜닝 본체, CatBoost lazy import. 부록 A 에 FR-067~069 매핑 추가. |
+| 2026-04-24 | 0.5.1 | **fix/ux**: datetime 컬럼 처리 hardening — ① `services/training_service._build_preprocessing` 기본 경로를 `split_feature_types_v2` 기반으로 통합해 `datetime64[ns]` 컬럼 자동 drop(SimpleImputer 거부 에러 해소), ② `utils/file_utils.read_tabular(_bytes)` 업로드 단계에서 object dtype 컬럼을 휴리스틱(≥90% 파싱 성공)으로 `datetime64` 자동 감지, ③ LightGBM 팩토리에 `verbose=-1/verbosity=-1` 부여해 "No further splits" 스팸 억제, ④ `utils/log_utils._install_noisy_warning_filters` 로 sklearn "X does not have valid feature names" UserWarning 전역 필터. 계약/아티팩트/FR 변경 없음. 테스트 +7(회귀 3, datetime 감지 4). |
+| 2026-04-24 | 0.5.2 | **fix/ux**: 부적절한 타깃 사전 차단 — 사용자가 `date`(datetime64) 를 타깃으로 선택 + classification 으로 학습하면 xgboost 는 fit 단계, 그 외 알고리즘은 scoring/persist 단계에서 실패 → 전체 job 이 rollback 되어 "8개 ok 인데 왜 failed?" 현상이 발생. `services/training_service._validate_target_column` 을 `_load_dataset_for_training` 직후, `_create_running_job` 전에 호출하여 (a) 타깃이 `datetime64` 이면 `Msg.TARGET_DATETIME_NOT_SUPPORTED`, (b) `task_type='classification'` 인데 고유값이 `max(50, n/2)` 이상이면 `Msg.TARGET_TOO_MANY_CLASSES` 로 즉시 `ValidationError`. `running` 상태 job 이 만들어지지 않으므로 UI/히스토리가 깔끔. 매뉴얼 `docs/manual/03_training.md` "자주 겪는 오류" 2행 추가. 테스트 +3 (`TestTargetValidation`). |
+| 2026-04-24 | 0.6 | **added**: **§11 특성 영향도 / 전역 설명성** — Phase A (`sklearn.inspection.permutation_importance`, 전처리 후 `X`, test/subsample 상한) + Phase B (트리 계열 `feature_importances_` 병치). `ml/` 순수 함수 + service DTO + `pages/04_results.py` UI. SHAP/PDP 등은 §11.7 후속. **§12** 는 하이퍼튜닝 본체용 앵커 절(상세 체크리스트는 §10.9 첫 항목) 추가. 기존 계획·§10 에서 튜닝 본체 참조 **§11 → §12** 로 이관(§10.9, §10.0~10.8 본문). 부록 A 에 FR-094~095(가칭, 구현 시 MVP 동기화) 매핑 행 추가. 부록 B 그래프에 11·12 노드 추가. `ARCHITECTURE.md` §6.1 `param_grid` 설명을 §12 로 정렬. `README.md` 구현 단계 하단 참조 문구에서 잘못된 §11 지시 제거. |
+| 2026-04-24 | 0.7 | **implemented**: §11 코드·테스트·문서 마감 — `ml/feature_influence.py`, `services/model_service.get_feature_influence`, `services/dto.py` 영향도 DTO, `pages/04_results.py` UI, `tests/ml/test_feature_influence.py`, `tests/services/test_model_service.py` 통합, `AutoML_Streamlit_MVP.md` §6.8 FR-094~095·화면 6, `ARCHITECTURE.md` 폴더 트리·§4.3 흐름, `docs/manual/04_results.md` Phase A/B·면책. 부록 A FR-094~095 행을 실제 경로로 정리. |
 
 ---
 
@@ -1348,3 +1436,30 @@ Required test coverage of 60.0% reached. Total coverage: 92.95%
 
 - `pytest -q` 300 passed · coverage 92.95% · ruff/black/mypy 0 에러 유지 (코드 변경 없음, PLAN 문서만 수정).
 - `make plan-check`: `OK: in-progress=0`.
+
+### 진행 로그 — 핫픽스: datetime + LightGBM 경고 스팸 (2026-04-24)
+
+- 2026-04-24 | hotfix 0.5.1 | started | 사용자 리포트: `SimpleImputer does not support dtype datetime64[ns]` + LightGBM 경고 수백~수천 줄 스팸
+- 2026-04-24 | hotfix 0.5.1 | completed | 구현 + 테스트 통과
+  - `services/training_service._build_preprocessing` 기본/v2 경로 모두 `split_feature_types_v2` 로 통합 → datetime 자동 drop + `run_log` 에 `datetime_dropped: <col> ...` 안내.
+  - `utils/file_utils._coerce_datetime_columns` 추가. 파싱 성공 비율 ≥ 0.9 인 object 컬럼만 `datetime64[ns]` 로 승격 (순수 숫자 문자열/소표본은 보수적으로 스킵).
+  - `ml/registry._try_register_lightgbm` 의 LGBM factory 에 `verbose=-1, verbosity=-1` 인자 추가.
+  - `utils/log_utils._install_noisy_warning_filters` 추가: sklearn UserWarning (feature_names) 전역 억제. `_initialize` 에서 1회 호출.
+  - 테스트: `tests/services/test_training_service.py::TestDatetimeColumnHandling` 3건 + `tests/utils/test_file_utils.py::TestDatetimeAutoDetection` 4건. 전체 515 passed (직전 +4, datetime 회귀 3개는 이전 커밋에서 추가 집계).
+  - 문서: `docs/manual/03_training.md` 에 "datetime 컬럼 처리" / "LightGBM 경고 스팸 관련" 단락 보강.
+
+### 진행 로그 — 핫픽스: 부적절한 타깃 사전 차단 (2026-04-24)
+
+- 2026-04-24 | hotfix 0.5.2 | started | 사용자 리포트: `target=date`(datetime64) + classification → xgboost fit 실패 + 나머지 8개 모델도 scoring/persist 단계에서 예외 → DB rollback, `best=None`, `job.status='failed'`. run_log 엔 `train:... ok` 만 남아 "왜 전체 실패?" 혼란.
+- 2026-04-24 | hotfix 0.5.2 | completed | 구현 + 테스트 통과
+  - `services/training_service._validate_target_column` 추가. `_load_dataset_for_training` 직후 / `_create_running_job` 전에 호출.
+    - 타깃이 `datetime64` → `ValidationError(Msg.TARGET_DATETIME_NOT_SUPPORTED)`
+    - `task_type='classification'` 인데 `y.nunique() >= max(50, n/2)` → `ValidationError(Msg.TARGET_TOO_MANY_CLASSES)` (+실제 수치 부기)
+  - `utils/messages.py`: `TARGET_DATETIME_NOT_SUPPORTED`, `TARGET_TOO_MANY_CLASSES` 한국어 메시지 상수 2건 추가.
+  - 테스트: `tests/services/test_training_service.py::TestTargetValidation` 3건 — datetime 타깃 차단 / 고유값 폭발 차단 / 회귀는 허용. 전체 518 passed.
+  - 문서: `docs/manual/03_training.md` "자주 겪는 오류" 표에 2행 추가.
+
+### 진행 로그 — 계획서: §11 특성 영향도 (Phase A/B) 스펙 수립 (2026-04-24)
+
+- 2026-04-24 | 단계 11 | completed | **계획서만 갱신(코드 없음).** §11 `단계 11. 특성 영향도 / 전역 설명성` 블록 신설: 11.0 설계 결정, 11.1 Phase A (`permutation_importance` + test/subsample 상한), 11.2 Phase B (트리 `feature_importances_` 병치), 11.3~11.6 service/DTO/UI/테스트/수용 기준, 11.7 SHAP·PDP 후속. **§12** 는 `단계 12. 하이퍼파라미터 튜닝 본체 (후속)` 한 절로 앵커만 추가(상세는 §10.9 첫 항목). 문서 버전 **0.6**, 변경 이력 행 추가. §10 본문·§10.9 에서 하이퍼파라미터 튜닝 본체 참조 **§11 → §12** 로 정리. 부록 A 에 FR-094~095(가칭) 매핑, 부록 B 그래프에 `[11]`·`[12]` 노드 추가. `ARCHITECTURE.md`·`README.md` 참조 정리. 구현 착수 시 `AutoML_Streamlit_MVP.md` FR 번호 확정 및 `ARCHITECTURE.md` 데이터 흐름 동기화.
+- 2026-04-24 | 단계 11 | completed | **구현·DoD 마감.** `ml/feature_influence.py`, `model_service.get_feature_influence` + `training_service` 재사용(전처리·타깃·split), DTO·메시지·`Event.MODEL_INFLUENCE_COMPUTED`, `pages/04_results.py` expander, 단위·서비스 테스트, 전체 pytest 523 passed. MVP FR-094~095, `ARCHITECTURE.md` §4.3·`ml/feature_influence.py` 트리, `docs/manual/04_results.md` 보강, 계획서 **0.7**·부록 A 정리.

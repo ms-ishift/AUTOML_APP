@@ -37,6 +37,7 @@ class Event:
     # 모델/아티팩트
     MODEL_SAVED = "model.saved"
     MODEL_DELETED = "model.deleted"
+    MODEL_INFLUENCE_COMPUTED = "model.influence_computed"
     ARTIFACT_SAVE_FAILED = "artifact.save_failed"
     MODEL_LEGACY_PREPROCESSING_LOADED = "model.legacy_preprocessing_loaded"  # §9.8 하위호환
 

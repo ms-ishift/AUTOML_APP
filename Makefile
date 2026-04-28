@@ -12,7 +12,7 @@ ifneq ($(wildcard $(VENV_BIN)),)
 export PATH := $(VENV_BIN):$(PATH)
 endif
 
-.PHONY: help venv install install-dev samples test test-fast cov lint fmt ci run smoke bench plan-check clean doctor
+.PHONY: help venv install install-dev samples test test-fast cov lint fmt ci run run-logs docker-assert docker-build docker-run smoke bench plan-check clean doctor
 
 help:
 	@echo "Targets:"
@@ -27,6 +27,9 @@ help:
 	@echo "  fmt          - ruff --fix + black"
 	@echo "  ci           - lint + cov 통합 게이트 (§7.5)"
 	@echo "  run          - sync config + streamlit 실행"
+	@echo "  run-logs     - app 로그 실시간 보기 (tail -F, 별 터미널에서 make run 과 병행)"
+	@echo "  docker-build - Docker 이미지 빌드 (기본 태그: automl-app:latest)"
+	@echo "  docker-run   - Docker 컨테이너 실행 (8501 포트 노출)"
 	@echo "  bench        - NFR-003 성능 벤치 (scripts/perf_bench.py)"
 	@echo "  doctor       - 실행 환경 점검 (venv / python / streamlit 해석)"
 	@echo "  plan-check   - IMPLEMENTATION_PLAN.md 의 [~] 개수 점검"
@@ -72,6 +75,39 @@ ci: lint cov
 run:
 	$(PYTHON) scripts/sync_streamlit_config.py
 	$(PYTHON) -m streamlit run app.py
+
+# storage 위치는 .env 의 STORAGE_DIR 등으로 바뀔 수 있으므로 settings 에서 경로를 해석한다.
+# LOGFILE=/path/to/app.log 으로 고정 경로를 줄 수 있다.
+run-logs:
+	@set -e; \
+	if [ -n "$(LOGFILE)" ]; then log="$(LOGFILE)"; else \
+		log="$$($(PYTHON) -c 'from config.settings import settings; print(settings.logs_dir / "app.log")')"; \
+	fi; \
+	echo "[run-logs] tail -F $$log  (끄려면 Ctrl+C)"; \
+	exec tail -F "$$log"
+
+# Docker 실행 편의 타깃.
+# IMAGE_TAG=your-tag PORT=8502 로 오버라이드 가능.
+# docker 가 없을 때(예: make docker-build → "docker: command not found") 는
+# https://docs.docker.com/get-docker/ 에서 설치하거나, macOS 는 Docker Desktop 설치·실행 후 터미널을 다시 연다.
+docker-assert:
+	@command -v docker >/dev/null 2>&1 || { \
+		echo "ERROR: docker CLI not in PATH. Install Docker (e.g. Docker Desktop) and try again: https://docs.docker.com/get-docker/"; \
+		echo "  macOS: open Docker.app once so docker is on PATH, then: make docker-build"; \
+		exit 127; \
+	}
+
+docker-build: docker-assert
+	@tag="$${IMAGE_TAG:-automl-app:latest}"; \
+	echo "[docker-build] building $$tag"; \
+	docker build -t "$$tag" .
+
+docker-run: docker-assert
+	@set -e; \
+	tag="$${IMAGE_TAG:-automl-app:latest}"; \
+	port="$${PORT:-8501}"; \
+	echo "[docker-run] running $$tag on localhost:$$port"; \
+	docker run --rm -p "$$port:8501" "$$tag"
 
 smoke:
 	$(PYTHON) -m pytest -q -m "not slow"

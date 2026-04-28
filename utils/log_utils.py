@@ -13,9 +13,29 @@ from __future__ import annotations
 import logging
 import logging.handlers
 import threading
+import warnings
 from typing import Any, Final
 
 from config.settings import settings
+
+
+def _install_noisy_warning_filters() -> None:
+    """예측 결과에 영향이 없는 반복 경고를 전역 필터로 억제한다.
+
+    억제 대상:
+    - ``X does not have valid feature names, but ... was fitted with feature names``
+      (sklearn ``_check_feature_names``): ``ColumnTransformer`` 가 numpy 배열을 반환해
+      추정기 predict 시 이름이 사라지는 구조적 경고로, 학습/예측 결과에는 영향 없음.
+
+    필터는 전역 ``warnings`` 모듈에 등록되므로 멀티페이지/재진입 환경에서도 idempotent
+    하다 (같은 메시지 패턴이 중복 등록돼도 동작은 동일).
+    """
+    warnings.filterwarnings(
+        "ignore",
+        message=r"X does not have valid feature names, but .* was fitted with feature names",
+        category=UserWarning,
+    )
+
 
 _LOCK: Final[threading.Lock] = threading.Lock()
 _INITIALIZED: bool = False
@@ -46,6 +66,7 @@ def _initialize() -> None:
         if _INITIALIZED:
             return
 
+        _install_noisy_warning_filters()
         settings.ensure_dirs()
         log_path = settings.logs_dir / "app.log"
 

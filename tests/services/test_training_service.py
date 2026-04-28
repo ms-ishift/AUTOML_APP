@@ -892,6 +892,194 @@ class TestBalancerIntegration:
             assert "balance: strategy=class_weight" in run_log
 
 
+class TestDatetimeColumnHandling:
+    """Regression: ``datetime64[ns]`` 컬럼이 기본 전처리 경로에서 자동 drop 되어야 한다.
+
+    이전에는 ``split_feature_types`` 가 datetime 을 cat 으로 편입 → ``SimpleImputer``
+    가 ``datetime64[ns]`` dtype 을 거부해 모든 알고리즘이 동시에 실패했다 (버그 리포트).
+    xlsx 업로드 / parquet 경로처럼 pandas 가 native datetime dtype 으로 읽어오는
+    케이스에서 주로 발생하므로, 단위 테스트는 ``_build_preprocessing`` 에 이미
+    datetime64 컬럼이 포함된 DataFrame 을 직접 주입해 회귀를 검증한다.
+    """
+
+    @staticmethod
+    def _df_with_datetime() -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "age": [25, 30, 35, 40, 45, 50, 55, 60] * 4,
+                "income": [30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0] * 4,
+                "signup": pd.to_datetime(
+                    [
+                        "2023-01-01",
+                        "2023-02-15",
+                        "2023-03-20",
+                        "2023-04-10",
+                        "2023-05-05",
+                        "2023-06-18",
+                        "2023-07-22",
+                        "2023-08-30",
+                    ]
+                    * 4
+                ),
+                "species": (["setosa", "versicolor"] * 4) * 4,
+            }
+        )
+
+    def test_default_path_drops_datetime_column(self) -> None:
+        df = self._df_with_datetime()
+        config = TrainingConfig(
+            dataset_id=1,
+            task_type="classification",
+            target_column="species",
+        )
+        (
+            preprocessor,
+            schema,
+            X,
+            _y,
+            _route,
+            dropped,
+        ) = training_service._build_preprocessing(df, config)
+
+        assert dropped == ("signup",)
+        assert "signup" not in X.columns
+        assert "signup" not in schema.input_columns
+        assert schema.datetime == ("signup",)
+        preprocessor.fit(X)
+        transformed = preprocessor.transform(X)
+        assert transformed.shape[0] == len(X)
+
+    def test_v2_path_without_decompose_drops_datetime(self) -> None:
+        df = self._df_with_datetime()
+        pp_cfg = PreprocessingConfig(datetime_decompose=False)
+        config = TrainingConfig(
+            dataset_id=1,
+            task_type="classification",
+            target_column="species",
+            preprocessing=pp_cfg,
+        )
+        _, schema, X, _y, _route, dropped = training_service._build_preprocessing(df, config)
+        assert dropped == ("signup",)
+        assert "signup" not in X.columns
+        assert schema.datetime == ("signup",)
+
+    def test_v2_path_with_decompose_keeps_datetime(self) -> None:
+        df = self._df_with_datetime()
+        pp_cfg = PreprocessingConfig(
+            datetime_decompose=True,
+            datetime_parts=("year", "month"),
+        )
+        config = TrainingConfig(
+            dataset_id=1,
+            task_type="classification",
+            target_column="species",
+            preprocessing=pp_cfg,
+        )
+        preprocessor, _schema, X, _y, _route, dropped = training_service._build_preprocessing(
+            df, config
+        )
+        assert dropped == ()
+        assert "signup" in X.columns
+        preprocessor.fit(X)
+        transformed = preprocessor.transform(X)
+        assert transformed.shape[1] >= 2  # year + month 파생 포함
+
+
+class TestTargetValidation:
+    """§10.9 / v0.5.2 hotfix: 부적절한 타깃(날짜/고유값 폭발) 사전 차단.
+
+    - datetime64 타깃 → ``ValidationError`` 즉시 raise (xgboost 등 fit 실패 방지)
+    - classification 인데 고유 클래스 수가 ``max(50, n/2)`` 이상 → 차단
+    - running job 이 생성되기 전에 실패해야 하므로 ``TrainingJob`` row 가 없다
+    """
+
+    @staticmethod
+    def _write_csv(df: pd.DataFrame, storage: Path) -> Path:
+        path = storage / f"seed_{uuid.uuid4().hex}.csv"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(path, index=False)
+        return path
+
+    def test_datetime_target_is_rejected(
+        self,
+        tmp_storage: Path,
+        seeded_system_user: object,  # noqa: ARG002
+    ) -> None:
+        df = pd.DataFrame(
+            {
+                "feat": range(30),
+                "event_at": pd.date_range("2024-01-01", periods=30, freq="D"),
+            }
+        )
+        csv_path = self._write_csv(df, tmp_storage)
+        _, dataset_id = _seed_project_and_dataset(csv_path, tmp_storage)
+        config = TrainingConfig(
+            dataset_id=dataset_id,
+            task_type="classification",
+            target_column="event_at",
+        )
+        with pytest.raises(ValidationError) as excinfo:
+            training_service.run_training(config)
+        assert "날짜" in str(excinfo.value) or "datetime" in str(excinfo.value).lower()
+
+        # running job 이 만들어지지 않아야 한다 (검증은 job 생성 전에 수행)
+        with session_scope() as session:
+            jobs = list(training_repository.list_by_project(session, project_id=1))
+            assert all(j.status != "running" for j in jobs)
+
+    def test_classification_with_too_many_unique_target_is_rejected(
+        self,
+        tmp_storage: Path,
+        seeded_system_user: object,  # noqa: ARG002
+    ) -> None:
+        # 고유값 = 60개 → threshold=max(50, 30)=50 이상
+        df = pd.DataFrame(
+            {
+                "feat": range(60),
+                "target": [f"class_{i}" for i in range(60)],
+            }
+        )
+        csv_path = self._write_csv(df, tmp_storage)
+        _, dataset_id = _seed_project_and_dataset(csv_path, tmp_storage)
+        config = TrainingConfig(
+            dataset_id=dataset_id,
+            task_type="classification",
+            target_column="target",
+        )
+        with pytest.raises(ValidationError) as excinfo:
+            training_service.run_training(config)
+        assert "고유값" in str(excinfo.value) or "고유" in str(excinfo.value)
+
+    def test_regression_with_many_unique_target_is_allowed(
+        self,
+        tmp_storage: Path,
+        seeded_system_user: object,  # noqa: ARG002
+    ) -> None:
+        """회귀는 연속형 타깃이므로 고유값 많아도 통과해야 한다."""
+        df = pd.DataFrame(
+            {
+                "feat": list(range(60)) * 2,
+                "target": [float(i) * 0.1 for i in range(60)] * 2,
+            }
+        )
+        csv_path = self._write_csv(df, tmp_storage)
+        _, dataset_id = _seed_project_and_dataset(csv_path, tmp_storage)
+        config = TrainingConfig(
+            dataset_id=dataset_id,
+            task_type="regression",
+            target_column="target",
+        )
+        # 이 단계에서 ValidationError 가 발생하지 않아야 한다.
+        # (run_training 전체 성공까지는 검증하지 않고, 타깃 검증만 통과하면 OK)
+        try:
+            training_service.run_training(config)
+        except ValidationError as exc:  # pragma: no cover
+            pytest.fail(f"회귀 타깃이 차단되면 안 된다: {exc}")
+        except Exception:
+            # 타깃 검증 이후 단계에서의 실패는 본 테스트 범위 밖
+            pass
+
+
 class TestAlgorithmDiscovery:
     """§10.4 (FR-067, FR-069): list_algorithms / list_optional_backends."""
 

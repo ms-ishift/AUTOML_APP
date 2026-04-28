@@ -41,9 +41,7 @@ if TYPE_CHECKING:
 
 
 PAGE_TITLE: Final[str] = "매뉴얼"
-PAGE_CAPTION: Final[str] = (
-    "각 페이지 사용법과 트러블슈팅을 한 화면에서 검색·확인합니다."
-)
+PAGE_CAPTION: Final[str] = "각 페이지 사용법과 트러블슈팅을 한 화면에서 검색·확인합니다."
 
 # MD 파일 키 → 사이드바 TOC 라벨 매핑.
 # 리스트에 없는 파일은 자동으로 "기타" 로 취급.
@@ -127,8 +125,7 @@ def main() -> None:
     all_keys = list_manual_keys()
     if not all_keys:
         st.error(
-            "`docs/manual/` 디렉터리에 매뉴얼 파일이 없습니다. "
-            "저장소가 온전한지 확인하세요."
+            "`docs/manual/` 디렉터리에 매뉴얼 파일이 없습니다. " "저장소가 온전한지 확인하세요."
         )
         return
 

@@ -188,6 +188,37 @@ class ModelDetailDTO:
     metrics_summary: dict[str, float] = field(default_factory=dict)
 
 
+# -------------------------------------------------------- Feature influence (§11, FR-094~095)
+
+
+@dataclass(frozen=True, slots=True)
+class FeatureInfluencePermutationRowDTO:
+    """순열 중요도 1행 — **학습 입력(원시) 피처 컬럼** 기준."""
+
+    feature_name: str
+    permutation_mean: float
+    permutation_std: float
+
+
+@dataclass(frozen=True, slots=True)
+class FeatureInfluenceBuiltinRowDTO:
+    """트리 내장 중요도 1행 — **전처리 후** 피처 공간 (one-hot 등으로 이름이 달라질 수 있음)."""
+
+    feature_name: str
+    importance: float
+
+
+@dataclass(frozen=True, slots=True)
+class FeatureInfluenceResultDTO:
+    """특성 영향도 계산 결과 (결과 비교 페이지 등)."""
+
+    permutation_rows: tuple[FeatureInfluencePermutationRowDTO, ...]
+    builtin_rows: tuple[FeatureInfluenceBuiltinRowDTO, ...]
+    n_rows_used: int
+    n_test_rows: int
+    scoring: str
+
+
 # ----------------------------------------------------------- Prediction Jobs
 
 

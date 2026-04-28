@@ -38,6 +38,13 @@ class Msg:
 
     # 학습 (FR-040~049)
     TARGET_REQUIRED = "예측 대상(타깃) 컬럼을 선택해 주세요."
+    TARGET_DATETIME_NOT_SUPPORTED = (
+        "학습 타깃으로 날짜/시간 컬럼은 사용할 수 없습니다. 다른 컬럼을 선택해 주세요."
+    )
+    TARGET_TOO_MANY_CLASSES = (
+        "분류 타깃의 고유값이 지나치게 많아 학습이 어렵습니다. "
+        "회귀 문제이거나 타깃을 잘못 선택했는지 확인해 주세요."
+    )
     TASK_TYPE_REQUIRED = "작업 유형(분류/회귀)을 선택해 주세요."
     ALGORITHM_REQUIRED = "학습할 알고리즘을 하나 이상 선택해 주세요."
     TRAINING_STARTED = "학습을 시작합니다."
@@ -69,6 +76,17 @@ class Msg:
     # 모델 (FR-070~075)
     MODEL_SAVED = "모델이 저장되었습니다."
     MODEL_SAVE_REQUIRES_SUCCESS = "성공한 모델만 저장할 수 있습니다."
+    INFLUENCE_DISCLAIMER = (
+        "특성 중요도는 데이터·모델에 대한 통계적 요약이며 원인(인과)을 의미하지 않습니다. "
+        "상관된 피처는 점수가 나뉘어 담길 수 있습니다."
+    )
+    INFLUENCE_BUILTIN_SECTION = "전처리 후 피처 (내장 중요도)"
+    INFLUENCE_BUILTIN_NONE = (
+        "이 알고리즘은 전처리 후 공간에서의 내장 중요도(feature_importances_)를 제공하지 않습니다."
+    )
+    INFLUENCE_COMPUTE_BUTTON = "특성 영향도 계산"
+    INFLUENCE_ROWS_CAPTION = "평가 행 수: {used} / 테스트 전체 {total} (행이 많으면 무작위 부분 표본을 사용합니다)."
+    INFLUENCE_FAILED = "특성 영향도를 계산하지 못했습니다."
     MODEL_DELETED = "모델이 삭제되었습니다."
     MODEL_REQUIRED = "먼저 저장된 모델을 선택해 주세요."
 

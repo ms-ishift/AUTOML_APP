@@ -84,6 +84,7 @@ automl_app/
 │  ├─ registry.py            # 알고리즘 카탈로그 (task_type→models)
 │  ├─ artifacts.py           # joblib 저장/로드, 스키마 저장
 │  ├─ profiling.py           # 데이터셋 프로파일(수치/범주/결측) 생성
+│  ├─ feature_influence.py   # 순열 중요도·트리 내장 importance (FR-094~095)
 │  └─ schemas.py             # FeatureSchema, TrainingConfig dataclass
 ├─ repositories/             # 영속성 (SQLAlchemy 2.x)
 │  ├─ base.py                # engine / SessionLocal / session_scope()
@@ -176,7 +177,27 @@ prediction_service.predict_batch(model_id, file_path: Path)
 returns PredictionResultDTO (rows: list[dict], result_path, warnings: list[str])
 ```
 
-### 4.3 세션 상태 (FR-002)
+### 4.3 특성 영향도 (FR-094 ~ FR-095)
+
+```
+[pages/04_results.py]
+  │  저장 모델 선택 + 「특성 영향도 계산」
+  ▼
+model_service.get_feature_influence(model_id: int)
+  │ 1) model_repository.get + dataset_repository.get  → artifact_dir, dataset file_path
+  │ 2) ml.artifacts.load_model_bundle(dir)            → ModelBundle + metrics.json(test 비율)
+  │ 3) training_service: 타깃 검증 + 전처리 재현(X,y) + split_dataset(학습과 동일 test_size)
+  │ 4) ml.feature_influence.compute_permutation_importance(...)  → Phase A 행
+  │ 5) ml.feature_influence.extract_builtin_transformed_importances(...)  → Phase B(트리만)
+  │ 6) audit_repository.append(MODEL_INFLUENCE_COMPUTED)
+  ▼
+returns FeatureInfluenceResultDTO (permutation rows + optional builtin rows)
+```
+
+- UI는 `ml/` 을 직접 호출하지 않고 위 Service API 만 사용한다.
+- Phase A/B 모두 **전처리 적용 후** 특성 공간에서의 이름·차원을 기준으로 한다.
+
+### 4.4 세션 상태 (FR-002)
 
 `utils/session_utils.py::SessionKey` 에 정의된 키만 사용한다 (그 외 금지):
 
@@ -230,7 +251,7 @@ REGRESSORS = { ... }  # linear, ridge, lasso, rf + Tier1(hist_gbm/extra_trees/gb
 
 - `AlgoSpec` 필드: `name, estimator_factory(), default_params, task_type, default_metric, is_optional_backend, param_grid`.
 - 신규 알고리즘 추가는 **Spec 1개 등록만으로 완료** (OCP).
-- `param_grid` 는 §11(하이퍼파라미터 튜닝) 을 위한 **스키마 슬롯**. `TrainingConfig.tuning.method="none"` 이 기본이며 그 외 값은 `training.tuning_downgraded` 이벤트 후 단일 fit 으로 fallback.
+- `param_grid` 는 §12(하이퍼파라미터 튜닝 본체, `IMPLEMENTATION_PLAN.md` 단계 12) 를 위한 **스키마 슬롯**. `TrainingConfig.tuning.method="none"` 이 기본이며 그 외 값은 `training.tuning_downgraded` 이벤트 후 단일 fit 으로 fallback.
 - 선택적 백엔드의 import 가드는 **레지스트리 로드 시 1회** 수행되며 `_OPTIONAL_BACKEND_STATUS` 에 `(name, available, reason)` 형태로 캐시된다.
 - UI(`pages/*`)는 `ml/registry` 를 **직접 import 하지 않는다**. 반드시 `services/training_service` 의 다음 API 를 경유한다:
   - `list_algorithms(task_type) -> list[AlgorithmInfoDTO]` — 사용 가능/불가 전체 목록과 사유

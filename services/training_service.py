@@ -44,7 +44,6 @@ from ml.preprocess import (
     build_preprocessor,
     plan_categorical_routing,
     prepare_xy,
-    split_feature_types,
     split_feature_types_v2,
 )
 from ml.registry import AlgoSpec, get_specs, optional_backends_status
@@ -375,6 +374,30 @@ def _load_dataset_for_training(config: TrainingConfig) -> tuple[int, Any]:
     return project_id, df
 
 
+def _validate_target_column(df: Any, config: TrainingConfig) -> None:
+    """타깃 컬럼 dtype/고유값 사전 검증 (학습 진입 전).
+
+    다음 경우 ``ValidationError`` 로 즉시 차단한다:
+    - 타깃이 ``datetime64`` 계열 (분류/회귀 모두 의미 없음, xgboost 등은 fit 자체 실패)
+    - ``task_type='classification'`` 인데 고유 클래스 수가 ``max(50, n_samples/2)`` 이상
+      (거의 unique 에 가까운 컬럼을 분류 타깃으로 잘못 선택한 경우 방어)
+    """
+    import pandas as pd  # 지연 import: ml/ 레이어에 두지 않기 위함
+
+    y = df[config.target_column]
+    if pd.api.types.is_datetime64_any_dtype(y):
+        raise ValidationError(Msg.TARGET_DATETIME_NOT_SUPPORTED)
+
+    if config.task_type == "classification":
+        n_samples = int(len(y))
+        n_unique = int(y.nunique(dropna=True))
+        threshold = max(50, n_samples // 2)
+        if n_unique >= threshold and n_samples > 0:
+            raise ValidationError(
+                f"{Msg.TARGET_TOO_MANY_CLASSES} (고유값 {n_unique} / 샘플 {n_samples})"
+            )
+
+
 def _create_running_job(
     config: TrainingConfig,
     *,
@@ -418,46 +441,93 @@ def _create_running_job(
     return job_id
 
 
+def _record_preprocessing_metadata(
+    *,
+    job_id: int,
+    pp_cfg_effective: PreprocessingConfig,
+    dropped_dt_cols: tuple[str, ...],
+) -> None:
+    """§9.7/§9.8: 전처리 요약 run_log + (커스텀이면) AuditLog + (datetime drop) 안내."""
+    with session_scope() as session:
+        _append_log(session, job_id, f"preprocessing: {pp_cfg_effective.summary()}")
+        if dropped_dt_cols:
+            _append_log(
+                session,
+                job_id,
+                (
+                    "datetime_dropped: "
+                    + ",".join(dropped_dt_cols)
+                    + " (고급 전처리에서 'datetime 분해'를 켜면 year/month 등으로 분해됩니다)"
+                ),
+            )
+        if not pp_cfg_effective.is_default:
+            audit_repository.write(
+                session,
+                action_type=Event.TRAINING_PREPROCESSING_CUSTOMIZED,
+                target_type="TrainingJob",
+                target_id=job_id,
+                detail={"summary": pp_cfg_effective.summary()},
+            )
+            log_event(
+                logger,
+                Event.TRAINING_PREPROCESSING_CUSTOMIZED,
+                job_id=job_id,
+                summary=pp_cfg_effective.summary(),
+            )
+
+
 def _build_preprocessing(
     df: Any,
     config: TrainingConfig,
-) -> tuple[Any, FeatureSchema, Any, Any, PreprocessingRouteReport | None]:
-    """전처리기/스키마/(X, y) 빌드. 피처가 비면 ``ValidationError``.
+) -> tuple[Any, FeatureSchema, Any, Any, PreprocessingRouteReport | None, tuple[str, ...]]:
+    """전처리기/스키마/(X, y)/드롭된 datetime 컬럼 빌드. 피처가 비면 ``ValidationError``.
 
     §9.7: ``config.preprocessing`` 이 주어지면 고급 설정을 그대로 ml 레이어로 forward.
-    None 이면 기존 MVP 경로(인자 없이 `build_preprocessor` 호출) 유지 → 기존 테스트 회귀 0.
+    None 이면 기존 MVP 경로 유지. 단 **두 경로 모두** ``split_feature_types_v2`` 로
+    datetime 컬럼을 선제 분리한다 — ``SimpleImputer`` 가 ``datetime64[ns]`` dtype 을
+    거부하는 이슈(모든 알고리즘 동반 실패)를 차단하기 위함.
 
-    반환값 마지막 ``route_report`` 는 §9.9 UI 미리보기 소비용. 레거시 경로는 ``None``.
+    기본 경로 (``pp_cfg=None``):
+    - datetime 컬럼은 **자동 drop** (사용자가 ``excluded_columns`` 로 명시했을 때와 동일 효과).
+    - bool 컬럼은 기존 v1 호환을 위해 cat 그룹으로 합류.
+    - drop 된 datetime 컬럼 목록은 호출자가 ``run_log`` 에 안내 문구로 append.
+
+    반환값: ``(preprocessor, feature_schema, X, y, route_report, dropped_datetime_cols)``.
     """
     pp_cfg = config.preprocessing
+    num_cols_v2, cat_cols_v2, dt_cols, bool_cols = split_feature_types_v2(
+        df,
+        target=config.target_column,
+        excluded=config.excluded_columns,
+    )
     if pp_cfg is None:
-        num_cols, cat_cols = split_feature_types(
-            df,
-            target=config.target_column,
-            excluded=config.excluded_columns,
-        )
+        # 기본 경로: bool 은 cat 으로 합류(v1 호환), datetime 은 자동 drop.
+        effective_cat = list(cat_cols_v2) + [c for c in bool_cols if c not in cat_cols_v2]
         try:
-            preprocessor = build_preprocessor(num_cols, cat_cols)
+            preprocessor = build_preprocessor(num_cols_v2, effective_cat)
         except ValueError as exc:
             raise ValidationError(
                 "학습에 사용할 수치/범주 피처가 없습니다. 제외 컬럼 설정을 확인해 주세요.",
                 cause=exc,
             ) from exc
-        feature_schema = build_feature_schema(df, num_cols, cat_cols, config.target_column)
+        feature_schema = build_feature_schema(
+            df,
+            num_cols_v2,
+            effective_cat,
+            config.target_column,
+            datetime_cols=dt_cols,
+        )
         X, y = prepare_xy(df, config)
-        return preprocessor, feature_schema, X, y, None
+        if dt_cols:
+            X = X.drop(columns=[c for c in dt_cols if c in X.columns])
+        return preprocessor, feature_schema, X, y, None, tuple(dt_cols)
 
     # §9.7 신규 경로: 타입 분류 v2 + config 기반 preprocessor + route report
-    num_cols, cat_cols, dt_cols, bool_cols = split_feature_types_v2(
-        df,
-        target=config.target_column,
-        excluded=config.excluded_columns,
-    )
-    route_report = plan_categorical_routing(df, cat_cols, pp_cfg)
+    route_report = plan_categorical_routing(df, cat_cols_v2, pp_cfg)
     try:
         preprocessor = build_preprocessor(
-            num_cols,
-            cat_cols,
+            num_cols_v2,
+            cat_cols_v2,
             config=pp_cfg,
             df_sample=df,
             datetime_cols=dt_cols,
@@ -470,8 +540,8 @@ def _build_preprocessing(
         ) from exc
     feature_schema = build_feature_schema(
         df,
-        num_cols,
-        cat_cols,
+        num_cols_v2,
+        cat_cols_v2,
         config.target_column,
         datetime_cols=dt_cols,
         bool_cols=bool_cols,
@@ -479,7 +549,14 @@ def _build_preprocessing(
         route_report=route_report,
     )
     X, y = prepare_xy(df, config)
-    return preprocessor, feature_schema, X, y, route_report
+    # datetime_decompose=False 면 datetime 컬럼은 ColumnTransformer 에서 drop 되지만
+    # pandas DataFrame 이 여전히 해당 컬럼을 담고 있으면 하위 추정기 호출 직전
+    # 검증 단계에서 dtype 체크가 통과하지 않는 경우가 있어 사전 제거해 둔다.
+    drop_dt: tuple[str, ...] = ()
+    if dt_cols and not pp_cfg.datetime_decompose:
+        drop_dt = tuple(dt_cols)
+        X = X.drop(columns=[c for c in dt_cols if c in X.columns])
+    return preprocessor, feature_schema, X, y, route_report, drop_dt
 
 
 def _make_balancer(
@@ -550,6 +627,20 @@ def _apply_algorithm_filter(
     return filtered
 
 
+def rebuild_xy_for_influence_analysis(df: Any, config: TrainingConfig) -> tuple[Any, Any]:
+    """FR-094: 특성 영향도 계산용으로 학습과 동일한 전처리 경로에서 ``(X, y)`` 재구성.
+
+    호출 전에 ``assert_valid_training_target(df, config)`` 로 타깃 검증을 권장한다.
+    """
+    _, _schema, X, y, _route, _dropped = _build_preprocessing(df, config)
+    return X, y
+
+
+def assert_valid_training_target(df: Any, config: TrainingConfig) -> None:
+    """FR-094: 사후 분석·재현 경로에서 학습과 동일한 타깃 검증."""
+    _validate_target_column(df, config)
+
+
 def _emit_tuning_downgrade(config: TrainingConfig, job_id: int) -> None:
     """§10.3 (§11 선반영): 튜닝 요청 시 안전 downgrade.
 
@@ -598,33 +689,28 @@ def run_training(
         "completed"            1.00
     """
     project_id, df = _load_dataset_for_training(config)
+    _validate_target_column(df, config)
     metric_key = _resolve_metric_key(config.task_type, config.metric_key)
     job_id = _create_running_job(config, project_id=project_id, metric_key=metric_key)
 
     _emit(on_progress, "preprocessing", _STAGE_RATIO["preprocessing"])
 
     try:
-        preprocessor, feature_schema, X, y, _route_report = _build_preprocessing(df, config)
+        (
+            preprocessor,
+            feature_schema,
+            X,
+            y,
+            _route_report,
+            dropped_dt_cols,
+        ) = _build_preprocessing(df, config)
 
-        # §9.7: preprocessing 요약을 run_log 에 1행 append
         pp_cfg_effective = config.preprocessing or PreprocessingConfig()
-        with session_scope() as session:
-            _append_log(session, job_id, f"preprocessing: {pp_cfg_effective.summary()}")
-            # §9.8: 고급 전처리 커스터마이즈 시 AuditLog + 구조화 로그 1회
-            if not pp_cfg_effective.is_default:
-                audit_repository.write(
-                    session,
-                    action_type=Event.TRAINING_PREPROCESSING_CUSTOMIZED,
-                    target_type="TrainingJob",
-                    target_id=job_id,
-                    detail={"summary": pp_cfg_effective.summary()},
-                )
-                log_event(
-                    logger,
-                    Event.TRAINING_PREPROCESSING_CUSTOMIZED,
-                    job_id=job_id,
-                    summary=pp_cfg_effective.summary(),
-                )
+        _record_preprocessing_metadata(
+            job_id=job_id,
+            pp_cfg_effective=pp_cfg_effective,
+            dropped_dt_cols=dropped_dt_cols,
+        )
 
         _emit(on_progress, "feature_engineering", _STAGE_RATIO["feature_engineering"])
 
@@ -904,10 +990,12 @@ def list_algorithms(task_type: str) -> list[AlgorithmInfoDTO]:
 
 
 __all__ = [
+    "assert_valid_training_target",
     "get_training_result",
     "list_algorithms",
     "list_optional_backends",
     "list_training_jobs",
     "preview_preprocessing",
+    "rebuild_xy_for_influence_analysis",
     "run_training",
 ]

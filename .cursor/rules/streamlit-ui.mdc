@@ -10,7 +10,7 @@ UI는 **입력 바인딩 + Service 호출 + 결과 렌더링**만 담당한다.
 
 ## 세션 상태
 
-공식 키만 사용한다(`ARCHITECTURE.md` §4.3). 그 외 키 사용 금지.
+공식 키만 사용한다(`ARCHITECTURE.md` §4.4 세션 상태). 그 외 키 사용 금지.
 
 ```python
 from utils.session_utils import get_state, set_state

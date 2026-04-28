@@ -11,6 +11,7 @@
 - 베스트 모델 자동 추천 — 기준 지표 방향(↑/↓) 에 따라 정해집니다 (`FR-071`)
 - 시각화: 분류는 혼동 행렬, 회귀는 실제 vs 예측 산점도 (`FR-072`)
 - ★ 버튼으로 **모델 저장** → 예측 페이지에서 바로 사용 가능 (`FR-073`)
+- **특성 영향도** (저장된 모델 선택 후 버튼): 순열 중요도 `FR-094`, 트리 모델이면 내장 `feature_importances_` 병치 `FR-095`
 
 **기본 사용 순서**
 
@@ -33,15 +34,33 @@
 - 실패한 알고리즘은 표에 남아 있지만 점수는 공란(NaN) 입니다 — ★ 저장 대상이 아닙니다.
 - 같은 학습 결과를 여러 번 저장해도 **다른 model_id** 로 중복 저장됩니다 (버전 관리는 §FR-074 참조).
 
+### 특성 영향도 (Phase A / Phase B)
+
+**Phase A — 순열 중요도 (`permutation_importance`)**
+
+- 저장된 모델·데이터셋·학습 설정을 읽어, 학습 때와 같은 타깃·전처리·**테스트 분할 비율**을 재현한 뒤 테스트(또는 설정된 상한까지의 서브샘플) 위에서 순열을 돌립니다.
+- 표·차트의 특성 이름은 **원시 CSV 컬럼명이 아니라** `ColumnTransformer` 등 전처리 이후의 이름(`get_feature_names_out`)입니다. 원-핫·다항 파생 피처는 각각 별도 행으로 나올 수 있습니다.
+- 값은 **모델 성능 변화**에 대한 요약이지, 변수 간 **인과 효과**를 증명하지 않습니다.
+
+**Phase B — 트리 내장 중요도**
+
+- `RandomForest`, `GradientBoosting`, XGB/LGBM 등 **트리 계열**이고 `feature_importances_` 가 있을 때만 두 번째 표·차트가 나타납니다.
+- 이름 축은 Phase A와 동일하게 **전처리 후** 기준입니다. 로지스틱 등 비트리 모델은 Phase A 블록만 표시됩니다.
+
+**비용**
+
+- 행 수가 많으면 서브샘플·`n_repeats` 상한으로 시간이 제한됩니다. 동일 입력이라도 sklearn/백엔드 버전에 따라 미세한 차이가 날 수 있습니다.
+
 ### 🛠 개발자 관점
 
 | 항목 | 위치 |
 | --- | --- |
 | 페이지 | `pages/04_results.py` |
-| 서비스 | `services/training_service.get_training_result` · `services/model_service.save_model` |
+| 서비스 | `services/training_service.get_training_result` · `services/model_service.save_model` · `services/model_service.get_feature_influence` |
 | 시각화 | 페이지 내부에서 `plotly.express` (혼동행렬 heatmap, 산점도) |
-| DTO | `services/dto.TrainingResultDTO` · `AlgoResultDTO` |
-| FR | FR-070 ~ FR-074 |
+| ML (영향도만) | `ml/feature_influence.py` — UI에서 직접 import 하지 않음 |
+| DTO | `services/dto.TrainingResultDTO` · `AlgoResultDTO` · `FeatureInfluenceResultDTO` |
+| FR | FR-070 ~ FR-075, FR-094 ~ FR-095 |
 
 **확장 포인트**
 

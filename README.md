@@ -221,7 +221,7 @@ pytest              # 테스트
 2. **2단계** — 모델 비교/저장, 단건·파일 예측, 결과 다운로드
 3. **3단계** — 이력·관리자 화면, 로그인, Postgres 전환
 
-세부 매핑과 수용 기준은 [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md) 및 [`ARCHITECTURE.md`](./ARCHITECTURE.md) §11 참조.
+세부 매핑과 수용 기준은 [`IMPLEMENTATION_PLAN.md`](./IMPLEMENTATION_PLAN.md) 및 [`ARCHITECTURE.md`](./ARCHITECTURE.md)를 참조합니다.
 
 ---
 

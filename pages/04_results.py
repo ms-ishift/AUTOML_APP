@@ -270,6 +270,112 @@ def _render_plot(task_type: str, plot_data: dict[str, Any]) -> None:
         st.info(f"알 수 없는 플롯 유형입니다: kind={kind!r} (task_type={task_type})")
 
 
+def _render_feature_influence_section(result: TrainingResultDTO) -> None:
+    """FR-094~095: 순열 중요도 + (가능 시) 전처리 후 내장 트리 중요도."""
+    success_rows = [r for r in result.rows if r.status == "success" and r.model_id is not None]
+    if not success_rows:
+        return
+    best_idx = next((i for i, r in enumerate(success_rows) if r.is_best), 0)
+    with st.expander("특성 영향도 (전역)", expanded=False):
+        st.caption(Msg.INFLUENCE_DISCLAIMER)
+        pick = st.selectbox(
+            "대상 모델",
+            options=list(range(len(success_rows))),
+            format_func=lambda i: (
+                f"{'★ ' if success_rows[i].is_best else ''}{success_rows[i].algo_name}"
+            ),
+            index=best_idx,
+            key="results_influence_model_pick",
+        )
+        row = success_rows[int(pick)]
+        assert row.model_id is not None
+        if st.button(Msg.INFLUENCE_COMPUTE_BUTTON, key="results_influence_btn"):
+            try:
+                inf = model_service.get_feature_influence(row.model_id)
+            except AppError as err:
+                flash("error", str(err))
+            else:
+                st.caption(
+                    Msg.INFLUENCE_ROWS_CAPTION.format(
+                        used=inf.n_rows_used,
+                        total=inf.n_test_rows,
+                    )
+                )
+                st.caption(f"scoring: **{inf.scoring}**")
+                top_perm = list(inf.permutation_rows)[:20]
+                if top_perm:
+                    try:
+                        import plotly.graph_objects as go
+
+                        fig = go.Figure(
+                            go.Bar(
+                                x=[r.permutation_mean for r in reversed(top_perm)],
+                                y=[r.feature_name for r in reversed(top_perm)],
+                                orientation="h",
+                                error_x=dict(
+                                    type="data",
+                                    array=[r.permutation_std for r in reversed(top_perm)],
+                                    visible=True,
+                                ),
+                            )
+                        )
+                        fig.update_layout(
+                            title="순열 중요도 (상위 20개, mean ± std)",
+                            margin={"l": 160, "r": 20, "t": 40, "b": 40},
+                            xaxis_title="importance",
+                        )
+                        st.plotly_chart(fig, width="stretch")
+                    except Exception:  # noqa: BLE001
+                        pass
+                    st.dataframe(
+                        [
+                            {
+                                "feature": r.feature_name,
+                                "mean": r.permutation_mean,
+                                "std": r.permutation_std,
+                            }
+                            for r in inf.permutation_rows
+                        ],
+                        hide_index=True,
+                        width="stretch",
+                    )
+                if inf.builtin_rows:
+                    st.subheader(Msg.INFLUENCE_BUILTIN_SECTION)
+                    st.caption(
+                        "이 표는 **전처리 후** 피처 이름(one-hot 등)을 사용합니다. "
+                        "위 순열 중요도와 열 이름·스케일이 다를 수 있습니다."
+                    )
+                    top_b = list(inf.builtin_rows)[:20]
+                    try:
+                        import plotly.graph_objects as go
+
+                        fig2 = go.Figure(
+                            go.Bar(
+                                x=[r.importance for r in reversed(top_b)],
+                                y=[r.feature_name for r in reversed(top_b)],
+                                orientation="h",
+                            )
+                        )
+                        fig2.update_layout(
+                            title="내장 중요도 (상위 20개)",
+                            margin={"l": 200, "r": 20, "t": 40, "b": 40},
+                            xaxis_title="importance",
+                        )
+                        st.plotly_chart(fig2, width="stretch")
+                    except Exception:  # noqa: BLE001
+                        pass
+                    st.dataframe(
+                        [
+                            {"feature": r.feature_name, "importance": r.importance}
+                            for r in inf.builtin_rows
+                        ],
+                        hide_index=True,
+                        width="stretch",
+                    )
+                else:
+                    st.info(Msg.INFLUENCE_BUILTIN_NONE)
+
+
 def _render_plot_section(result: TrainingResultDTO) -> None:
     success_rows = [r for r in result.rows if r.status == "success" and r.model_id is not None]
     if not success_rows:
@@ -415,6 +521,8 @@ def main() -> None:
 
     st.subheader("플롯")
     _render_plot_section(result)
+
+    _render_feature_influence_section(result)
 
     _render_save_actions(result)
     _render_nav_cta()

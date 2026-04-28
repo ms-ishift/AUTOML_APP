@@ -36,9 +36,7 @@ def test_public_manual_file_exists_and_has_body(key: str) -> None:
     path = MANUAL_DIR / f"{key}.md"
     assert path.is_file(), f"{path.name} 매뉴얼이 없습니다."
     text = path.read_text(encoding="utf-8")
-    assert len(text) >= MIN_CHARS, (
-        f"{path.name} 이(가) {MIN_CHARS}자 미만 — 콘텐츠가 퇴화했습니다."
-    )
+    assert len(text) >= MIN_CHARS, f"{path.name} 이(가) {MIN_CHARS}자 미만 — 콘텐츠가 퇴화했습니다."
 
 
 @pytest.mark.parametrize("key", REQUIRED_PRIVATE_KEYS)
@@ -49,7 +47,15 @@ def test_private_template_exists(key: str) -> None:
 
 @pytest.mark.parametrize(
     "key",
-    ("01_projects", "02_dataset_upload", "03_training", "04_results", "05_models", "06_prediction", "07_admin"),
+    (
+        "01_projects",
+        "02_dataset_upload",
+        "03_training",
+        "04_results",
+        "05_models",
+        "06_prediction",
+        "07_admin",
+    ),
 )
 def test_page_manual_has_user_and_developer_sections(key: str) -> None:
     """페이지별 매뉴얼은 사용자/개발자 이중 섹션을 유지해야 한다."""
@@ -57,9 +63,9 @@ def test_page_manual_has_user_and_developer_sections(key: str) -> None:
     assert "### 👤" in text, f"{key}.md 에 사용자 섹션(👤) 이 없습니다."
     assert "### 🛠" in text, f"{key}.md 에 개발자 섹션(🛠) 이 없습니다."
     # 트러블슈팅 표가 없으면 사용자 경험이 부족함.
-    assert "자주 겪는 오류" in text or "자주 겪는 문제" in text, (
-        f"{key}.md 에 오류 복구 섹션이 없습니다."
-    )
+    assert (
+        "자주 겪는 오류" in text or "자주 겪는 문제" in text
+    ), f"{key}.md 에 오류 복구 섹션이 없습니다."
 
 
 def test_troubleshooting_covers_known_risks() -> None:

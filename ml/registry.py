@@ -365,11 +365,27 @@ def _try_register_lightgbm() -> None:
         _record_backend_status("lightgbm", exc)
         return
 
+    # ``verbose=-1`` + ``verbosity=-1`` 조합으로 "No further splits with positive
+    # gain" 등 FR 에 무관한 저지연 경고 스팸을 억제한다 (터미널 수백/수천 줄 도배
+    # 방지). 학습 시작/완료 이벤트는 ``utils/log_utils`` 의 구조화 로거로 별도 1회
+    # 기록되므로 관찰성에는 영향 없다.
     def _lgbm_clf() -> Estimator:
-        return LGBMClassifier(random_state=_RANDOM_STATE, n_estimators=300, n_jobs=-1)
+        return LGBMClassifier(
+            random_state=_RANDOM_STATE,
+            n_estimators=300,
+            n_jobs=-1,
+            verbose=-1,
+            verbosity=-1,
+        )
 
     def _lgbm_reg() -> Estimator:
-        return LGBMRegressor(random_state=_RANDOM_STATE, n_estimators=300, n_jobs=-1)
+        return LGBMRegressor(
+            random_state=_RANDOM_STATE,
+            n_estimators=300,
+            n_jobs=-1,
+            verbose=-1,
+            verbosity=-1,
+        )
 
     _CLASSIFICATION_SPECS.append(
         AlgoSpec("lightgbm", "classification", _lgbm_clf, "f1", is_optional_backend=True)
